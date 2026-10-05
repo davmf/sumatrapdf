@@ -959,6 +959,17 @@ void SetInvertPageColors(bool invert) {
     gInvertPageColors = invert;
 }
 
+constexpr float kPageLift = 20;
+
+// No frame is drawn around pages, so a page must differ from the canvas to
+// show its edge: lighter, or darker when the canvas is already near white.
+static Color PageColorOnCanvas(Color canvasBg) {
+    if (GetLightness(canvasBg) + kPageLift > 255) {
+        return AdjustLightness2(canvasBg, -kPageLift);
+    }
+    return AdjustLightness2(canvasBg, kPageLift);
+}
+
 // colors for page bitmap recoloring (render cache)
 // TextColor substitutes black, BackgroundColor substitutes white in rendered pages
 static Color ThemePageRenderColorsNoInvert(Color& bg) {
@@ -1004,11 +1015,9 @@ static Color ThemePageRenderColorsNoInvert(Color& bg) {
     // Defaults: page colors follow the window theme (light theme → dark text on
     // light paper; dark theme → light text on dark paper).
     text = ThemeWindowTextColor();
-    bg = ThemeMainWindowBackgroundColor();
-
-    if (gCurrThemeIndex < 3) {
-        bg = AccentColor(bg, 8);
-    }
+    Color canvasBg;
+    ThemeDocumentColors(canvasBg);
+    bg = PageColorOnCanvas(canvasBg);
     return text;
 }
 

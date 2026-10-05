@@ -367,6 +367,7 @@ import { testit as toolPoster } from "./tool-poster.ts";
 import { testit as toolMerge } from "./tool-merge.ts";
 import { testit as reuseInstanceFullscreen } from "./reuse-instance-fullscreen.ts";
 import { testit as attachmentOpenExternal } from "./attachment-open-external.ts";
+import { testit as smartPageBoundary } from "./smart-page-boundary.ts";
 
 async function annotationClipboardTests(): Promise<void> {
   beginSharedControlledSession();
@@ -730,6 +731,7 @@ export const tests: NamedTest[] = [
   ["tool-merge", toolMerge],
   ["reuse-instance-fullscreen", reuseInstanceFullscreen],
   ["attachment-open-external", attachmentOpenExternal],
+  ["smart-page-boundary", smartPageBoundary],
 ];
 
 export async function testit(opts?: SuiteOptions): Promise<void> {

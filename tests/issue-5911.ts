@@ -36,6 +36,9 @@ function makePdf(): string {
   ]);
 }
 
+// dark-theme page is #1c1c1c; anything at or below is paper, not text
+const PAPER_LUM = 40;
+
 function urlBandStats(
   data: Uint8Array,
   w: number,
@@ -53,7 +56,7 @@ function urlBandStats(
       const g = data[i + 1]!;
       const r = data[i + 2]!;
       const lum = (r + g + b) / 3;
-      if (lum < 18) {
+      if (lum < PAPER_LUM) {
         continue;
       }
       if (r > 200 && g > 200 && b > 200) {
@@ -83,7 +86,7 @@ function urlBandStats(
       const b = data[i]!;
       const g = data[i + 1]!;
       const r = data[i + 2]!;
-      if ((r + g + b) / 3 < 18) {
+      if ((r + g + b) / 3 < PAPER_LUM) {
         continue;
       }
       const key = (r << 16) | (g << 8) | b;

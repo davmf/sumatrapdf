@@ -36,6 +36,7 @@
 
 #include "DisplayModel.h"
 #include "Theme.h"
+#include "PdfDarkMode.h"
 #include "AppSettings.h"
 #include "RenderCache.h"
 #include "ProgressUpdateUI.h"
@@ -3892,6 +3893,9 @@ static bool DrawDocument(MainWindow* win, HDC hdc, Rect rcArea) {
     // different color
     Color colPlaceholder;
     ThemeDocumentColors(colPlaceholder);
+    if (DocumentColorsFollowThemeEnabled()) {
+        ThemePageRenderColors(colPlaceholder);
+    }
     // until the first page of this tab has been painted, use the theme's
     // window background instead: e.g. restoring a session into a maximized
     // window can take a while to render the first page and a white
