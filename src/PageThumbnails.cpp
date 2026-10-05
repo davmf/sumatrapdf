@@ -21,6 +21,7 @@
 #include "DocController.h"
 #include "EngineBase.h"
 #include "DisplayModel.h"
+#include "RenderCache.h"
 #include "MainWindow.h"
 #include "Theme.h"
 #include "WindowTab.h"
@@ -124,7 +125,8 @@ static void DetachThumbnailCache(PageThumbnailsCache* cache) {
     DeleteThumbnailCache(cache);
 }
 
-Pixmap* RenderPageThumbnail(EngineBase* engine, int pageNo, Location loc, int rotation, int thumbDx, int thumbDy) {
+Pixmap* RenderPageThumbnail(EngineBase* engine, int pageNo, Location loc, int rotation, int thumbDx, int thumbDy,
+                            ThumbnailColors colors) {
     // reflow docs share one mediabox; don't use a flat pageNo that a clone's
     // chapter layout may have already shifted
     int boxPage = loc.IsValid() && engine->isReflowable ? 1 : pageNo;
@@ -142,6 +144,9 @@ Pixmap* RenderPageThumbnail(EngineBase* engine, int pageNo, Location loc, int ro
     pageRect = engine->Transform(pageRect, boxPage, 1.0f, rotation, true);
     RenderPageArgs args(pageNo, zoom, rotation, &pageRect, RenderTarget::View);
     args.loc = loc;
+    if (colors == ThumbnailColors::View) {
+        return PixmapToBgr(RenderPageViewColors(engine, args));
+    }
     return PixmapToBgr(engine->RenderPage(args));
 }
 
@@ -184,7 +189,8 @@ static void RenderAndPostThumbnail(ThumbnailRenderWorker* worker, EngineBase* en
     task->cache = worker->cache;
     task->pageNo = pageNo;
     task->loc = loc;
-    task->bitmap = RenderPageThumbnail(engine, pageNo, loc, worker->rotation, worker->thumbDx, worker->thumbDy);
+    task->bitmap = RenderPageThumbnail(engine, pageNo, loc, worker->rotation, worker->thumbDx, worker->thumbDy,
+                                       ThumbnailColors::View);
     uitask::Post(MkFunc0<ThumbnailRenderTask>(FinishThumbnailRender, task));
 }
 
@@ -365,12 +371,14 @@ void PageThumbnailsCtrl::DrawRow(DrawItemEvent* ev) {
     DisplayModel* dm = CurrentDoc(this);
     EngineBase* engine = dm ? dm->GetEngine() : nullptr;
     bool chapters = ShowChapterUi(dm);
+    Color pageBg;
+    ThemePageRenderColors(pageBg);
     for (int pageNo = firstPage; pageNo <= lastPage; pageNo++) {
         int col = pageNo - firstPage;
         int x = left + (col * (thumbDx + gap));
         Rect pageRect{x, ev->itemRect.y, thumbDx, thumbDy};
         bool isCurrent = pageNo == selectedPage;
-        ev->gfx->FillRect(pageRect, kColWhite);
+        ev->gfx->FillRect(pageRect, pageBg);
 
         Pixmap* thumbnail = ThumbnailToDraw(cache, pageNo - 1);
         if (thumbnail) {

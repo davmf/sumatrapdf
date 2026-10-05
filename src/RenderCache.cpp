@@ -114,6 +114,45 @@ static void FinalizeTileSkipRects(Vec<Rect>& skipRects, Size bmpSize) {
     VecAppend(skipRects, keep);
 }
 
+// The document colors the view shows, on a freshly rendered page: grayscale,
+// then the theme recolor unless the dark profile already rendered themed output
+static Pixmap* ApplyPageColors(RenderCache* cache, EngineBase* engine, const RenderPageArgs& args, bool grayscale,
+                               Pixmap* bmp) {
+    // before recoloring, so theme colors still apply
+    if (grayscale) {
+        bmp = GrayscalePagePixmap(bmp);
+    }
+
+    const DarkModeProfile* profile = args.darkProfile;
+    bool recolor;
+    if (profile) {
+        // object-level smart dark renders themed output directly
+        recolor = DarkModeProfileUsesLegacyPostProcess(profile);
+    } else {
+        recolor = ShouldUpdateBitmapColorsLegacy(engine, cache);
+    }
+    if (!recolor || bmp->hasAlpha) {
+        return bmp;
+    }
+
+    bool preserve = profile && profile->mode == PageColorMode::PreserveImages && profile->preservePdfImages;
+    Vec<Rect> skipRects;
+    Vec<Rect>* skipRectsPtr = nullptr;
+    if (preserve && args.pageRect) {
+        Size bmpSize(bmp->width, bmp->height);
+        engine->GetBitmapRecolorSkipRects(args.pageNo, args.zoom, args.rotation, *args.pageRect, bmpSize, skipRects);
+        FinalizeTileSkipRects(skipRects, bmpSize);
+        if (len(skipRects) > 0) {
+            skipRectsPtr = &skipRects;
+        }
+    }
+    Color textCol = profile ? profile->foreground : cache->textColor;
+    Color bgCol = profile ? profile->pageBackground : cache->backgroundColor;
+    Color linkCol = profile ? profile->linkColor : cache->linkColor;
+    RecolorPixmap(bmp, textCol, bgCol, linkCol, skipRectsPtr);
+    return bmp;
+}
+
 // RenderCache's verbose per-operation logging (FreePage / Paint / DropCacheEntry
 // / ...) is noisy, so it's disabled by default. Set gLogRenderCache = true to
 // re-enable it when debugging the cache.
@@ -315,6 +354,22 @@ static bool FreeIfFull(RenderCache* rc, const PageRenderRequest& req) {
 }
 
 extern RenderCache* gRenderCache;
+
+// Renders a page the way the view shows it: theme / dark mode and grayscale
+Pixmap* RenderPageViewColors(EngineBase* engine, RenderPageArgs& args) {
+    DarkModeProfile darkProfile;
+    BuildViewDarkModeProfile(engine, &darkProfile);
+    if (darkProfile.mode != PageColorMode::Normal) {
+        args.darkProfile = &darkProfile;
+    }
+    Pixmap* bmp = engine->RenderPage(args);
+    if (bmp) {
+        bool grayscale = AtomicBoolGet(&gRenderCache->grayscalePageColors);
+        bmp = ApplyPageColors(gRenderCache, engine, args, grayscale, bmp);
+    }
+    args.darkProfile = nullptr;
+    return bmp;
+}
 
 // a CachedObject id is a snapshot taken without cacheAccess, so the entry may
 // have been dropped (and freed) by another thread since: check before reading it
@@ -1308,38 +1363,8 @@ static DWORD WINAPI RenderCacheThread(LPVOID data) {
         req.errorCode = bmp ? 0 : 1;
 
         if (bmp) {
-            // before recoloring, so theme colors still apply
-            if (req.grayscale) {
-                bmp = GrayscalePagePixmap(bmp);
-                req.bmp = bmp;
-            }
-
-            const DarkModeProfile* profile = args.darkProfile;
-            bool recolor;
-            if (profile) {
-                // object-level smart dark renders themed output directly
-                recolor = DarkModeProfileUsesLegacyPostProcess(profile);
-            } else {
-                recolor = ShouldUpdateBitmapColorsLegacy(engine, cache);
-            }
-            if (recolor && !bmp->hasAlpha) {
-                bool preserve = profile && profile->mode == PageColorMode::PreserveImages && profile->preservePdfImages;
-                Vec<Rect> skipRects;
-                Vec<Rect>* skipRectsPtr = nullptr;
-                if (preserve) {
-                    Size bmpSize(bmp->width, bmp->height);
-                    engine->GetBitmapRecolorSkipRects(req.pageNo, req.zoom, req.rotation, req.pageRect, bmpSize,
-                                                      skipRects);
-                    FinalizeTileSkipRects(skipRects, bmpSize);
-                    if (len(skipRects) > 0) {
-                        skipRectsPtr = &skipRects;
-                    }
-                }
-                Color textCol = profile ? profile->foreground : cache->textColor;
-                Color bgCol = profile ? profile->pageBackground : cache->backgroundColor;
-                Color linkCol = profile ? profile->linkColor : cache->linkColor;
-                RecolorPixmap(bmp, textCol, bgCol, linkCol, skipRectsPtr);
-            }
+            bmp = ApplyPageColors(cache, engine, args, req.grayscale, bmp);
+            req.bmp = bmp;
             if (req.abort || req.darkModeEpoch != cache->darkModeEpoch) {
                 // colors changed while recoloring - discard result
                 FreePixmap(bmp);

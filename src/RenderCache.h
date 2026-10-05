@@ -252,6 +252,8 @@ struct RenderCache {
     void UpdateRenderInfo();
 };
 
+Pixmap* RenderPageViewColors(EngineBase*, RenderPageArgs&);
+
 void ToggleRenderInfoWindow();
 bool IsRenderInfoWindowVisible();
 

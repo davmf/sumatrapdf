@@ -63,4 +63,11 @@ struct PageThumbnailsCtrl : VirtListBox {
     void ResetCache();
 };
 
-Pixmap* RenderPageThumbnail(EngineBase*, int pageNo, Location, int rotation, int thumbDx, int thumbDy);
+// Original: as the file has it; View: theme / dark mode colors the view uses
+enum class ThumbnailColors {
+    Original,
+    View
+};
+
+Pixmap* RenderPageThumbnail(EngineBase*, int pageNo, Location, int rotation, int thumbDx, int thumbDy,
+                            ThumbnailColors colors = ThumbnailColors::Original);
