@@ -280,6 +280,7 @@ function sumatrapdf_files()
     "AnnotTextPopup.*",
     "AnnotEditToolbar.*",
     "AnnotFilterToolbar.*",
+    "CommentsPanel.*",
     "AnnotSearch.*",
     "CanvasAboutUI.*",
     "CaptionGlyphs.*",

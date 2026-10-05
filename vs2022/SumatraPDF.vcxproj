@@ -1432,6 +1432,7 @@
     <ClInclude Include="..\src\CommandAvailability.h" />
     <ClInclude Include="..\src\CommandPalette.h" />
     <ClInclude Include="..\src\Commands.h" />
+    <ClInclude Include="..\src\CommentsPanel.h" />
     <ClInclude Include="..\src\DarkMode.h" />
     <ClInclude Include="..\src\DisplayMode.h" />
     <ClInclude Include="..\src\DisplayModel.h" />
@@ -1637,6 +1638,7 @@
     <ClCompile Include="..\src\CommandAvailability.cpp" />
     <ClCompile Include="..\src\CommandPalette.cpp" />
     <ClCompile Include="..\src\Commands.cpp" />
+    <ClCompile Include="..\src\CommentsPanel.cpp" />
     <ClCompile Include="..\src\CustomZoomDialog.cpp" />
     <ClCompile Include="..\src\DarkMode.cpp" />
     <ClCompile Include="..\src\DisplayMode.cpp" />

@@ -28,6 +28,7 @@
 #include "Favorites.h"
 #include "PageThumbnails.h"
 #include "TableOfContents.h"
+#include "CommentsPanel.h"
 #include "SidebarPanel.h"
 
 constexpr int kViewIconDx = 16;
@@ -39,6 +40,8 @@ static const char* ViewIcon(SidebarView v) {
             return gIconSidebarBookmarks;
         case SidebarView::Thumbnails:
             return gIconHomeThumbnails;
+        case SidebarView::Comments:
+            return gIconSidebarComments;
         default:
             return gIconSidebarFavorites;
     }
@@ -50,6 +53,8 @@ static Str ViewName(SidebarView v) {
             return Tr("Bookmarks");
         case SidebarView::Thumbnails:
             return Tr("Thumbnails");
+        case SidebarView::Comments:
+            return Tr("Comments");
         default:
             return Tr("Favorites");
     }
@@ -62,12 +67,14 @@ static ILayout* ViewLayout(MainWindow* win, SidebarView v) {
             return win->tocViewLayout;
         case SidebarView::Thumbnails:
             return win->pageThumbs;
+        case SidebarView::Comments:
+            return CommentsViewLayout(win);
         default:
             return win->favViewLayout;
     }
 }
 
-static int ViewControls(MainWindow* win, SidebarView v, ControlBase* out[2]) {
+static int ViewControls(MainWindow* win, SidebarView v, ControlBase* out[3]) {
     switch (v) {
         case SidebarView::Bookmarks:
             out[0] = win->tocFilterEdit;
@@ -77,6 +84,8 @@ static int ViewControls(MainWindow* win, SidebarView v, ControlBase* out[2]) {
             out[0] = win->favFilterEdit;
             out[1] = win->favTreeView;
             return 2;
+        case SidebarView::Comments:
+            return CommentsViewControls(win, out);
         default:
             return 0;
     }
@@ -88,6 +97,8 @@ bool IsSidebarViewAvailable(MainWindow* win, SidebarView v) {
             return win->IsDocLoaded() && win->ctrl && win->ctrl->HasToc();
         case SidebarView::Thumbnails:
             return CanShowThumbnails(win->CurrentTab());
+        case SidebarView::Comments:
+            return CanShowComments(win->CurrentTab());
         default:
             return !gPluginMode && CanAccessDisk();
     }
@@ -145,7 +156,8 @@ void ResolveSidebarViews(MainWindow* win) {
     if (bottom->view != top->view) {
         return;
     }
-    const SidebarView order[] = {SidebarView::Favorites, SidebarView::Bookmarks, SidebarView::Thumbnails};
+    const SidebarView order[] = {SidebarView::Favorites, SidebarView::Bookmarks, SidebarView::Thumbnails,
+                                 SidebarView::Comments};
     for (SidebarView v : order) {
         if (v != top->view) {
             bottom->view = v;
@@ -223,6 +235,10 @@ static void OnFavoritesClick(SidebarPanel* p, VirtMouseEvent*) {
     OnViewClick(p, SidebarView::Favorites);
 }
 
+static void OnCommentsClick(SidebarPanel* p, VirtMouseEvent*) {
+    OnViewClick(p, SidebarView::Comments);
+}
+
 // ✕: hides the panel; on the Favorites tab, closes the tab
 static void OnCloseClick(SidebarPanel* p, VirtMouseEvent*) {
     MainWindow* win = p->win;
@@ -245,6 +261,8 @@ HWND SidebarPanelFocusHwnd(SidebarPanel* p) {
             return win->tocTreeView->hwnd;
         case SidebarView::Favorites:
             return win->favTreeView->hwnd;
+        case SidebarView::Comments:
+            return CommentsFocusHwnd(win);
         default:
             return p->hwnd;
     }
@@ -409,12 +427,12 @@ SidebarPanel* CreateSidebarPanel(MainWindow* win, SidebarPanelKind kind) {
     int dx = gSettings->sidebarDx;
     p->hwnd = CreateWindowExW(0, WC_STATIC, L"", style, 0, 0, dx, 0, win->hwndFrame, nullptr, hmod, nullptr);
 
-    // [B][T][F] ... [x]; the Favorites tab has only the ✕
+    // [B][T][F][C] ... [x]; the Favorites tab has only the ✕
     auto* header = new HBox();
     header->alignMain = MainAxisAlign::MainStart;
     header->alignCross = CrossAxisAlign::CrossCenter;
     using ClickFn = void (*)(SidebarPanel*, VirtMouseEvent*);
-    const ClickFn onClick[kSidebarViewCount] = {OnBookmarksClick, OnThumbnailsClick, OnFavoritesClick};
+    const ClickFn onClick[kSidebarViewCount] = {OnBookmarksClick, OnThumbnailsClick, OnFavoritesClick, OnCommentsClick};
     for (int i = 0; i < kSidebarViewCount; i++) {
         auto* b = new VirtIconButton();
         b->onClick = MkFunc1(onClick[i], p);
@@ -466,7 +484,7 @@ static void HostView(SidebarPanel* p, ILayout* view) {
 
 // shows a view's native controls in host, or hides them
 static void PlaceViewControls(MainWindow* win, SidebarView v, SidebarPanel* host) {
-    ControlBase* ctrls[2];
+    ControlBase* ctrls[3];
     int n = ViewControls(win, v, ctrls);
     for (int i = 0; i < n; i++) {
         HWND hwnd = ctrls[i]->hwnd;
@@ -520,6 +538,7 @@ void AttachSidebarViews(MainWindow* win) {
         thumbs->SetFlag(vwfFocused, false);
     }
     UpdateSidebarThumbnails(win);
+    UpdateCommentsPanel(win);
     for (SidebarPanel* p : panels) {
         UpdateViewIcons(p, DpiGetForHwnd(p->hwnd));
         RelayoutSidebarPanel(p);

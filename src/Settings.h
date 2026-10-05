@@ -280,7 +280,7 @@ struct FileState {
     // by the crypt key (64 chars); only applies to PDF documents
     Str decryptionKey;
     // what the sidebar's top panel shows: bookmarks (the default),
-    // thumbnails or favorites
+    // thumbnails, favorites or comments
     Str sidebarView;
     // how pages are laid out for this document. The string is the
     // persisted form of DisplayModel::displayMode, so it's parsed after
@@ -366,8 +366,8 @@ struct TabState {
     // if true, the table of contents was shown when the document was
     // closed
     bool showToc;
-    // what the sidebar's top panel showed: bookmarks, thumbnails or
-    // favorites
+    // what the sidebar's top panel showed: bookmarks, thumbnails,
+    // favorites or comments
     Str sidebarView;
     // which table of contents items were expanded (see FileStates ->
     // TocState)
@@ -817,7 +817,7 @@ struct HtmlUI {
 // Preferences are persisted in SumatraPDF-settings.txt
 struct Settings {
     // what the sidebar's bottom panel shows: favorites (the default),
-    // bookmarks or thumbnails
+    // bookmarks, thumbnails or comments
     Str sidebarBottomView;
     // if true, a PDF without an outline gets a table of contents built
     // from numbered headings in its text (Generate Table Of Contents

@@ -766,11 +766,11 @@ StructInfo gFileStateInfo = {
     "WindowBgCol and DefaultDisplayMode are already per-document as BgCol and DisplayMode below\0data required to "
     "determine which parts of the table of contents have been expanded\0path of the document\0data required to open a "
     "password protected document without having to ask for the password again\0what the sidebar's top panel shows: "
-    "bookmarks (the default), thumbnails or favorites\0layout of pages. valid values: automatic, single page, facing, "
-    "book view, continuous, continuous facing, continuous book view\0zoom (in %) or one of those values: fit page, fit "
-    "width, fit height, fit content, fit visible\0if given, overrides the background color for this document\0if "
-    "given, overrides the tab color for this document\0number of times this document has been opened recently\0number "
-    "of the last read page, or `bm:<bookmark>` for documents with chapters (folds in ReparseIdx; see "
+    "bookmarks (the default), thumbnails, favorites or comments\0layout of pages. valid values: automatic, single "
+    "page, facing, book view, continuous, continuous facing, continuous book view\0zoom (in %) or one of those values: "
+    "fit page, fit width, fit height, fit content, fit visible\0if given, overrides the background color for this "
+    "document\0if given, overrides the tab color for this document\0number of times this document has been opened "
+    "recently\0number of the last read page, or `bm:<bookmark>` for documents with chapters (folds in ReparseIdx; see "
     "PagePosition.cpp)\0number of pages in the document when it was last open; 0 if unknown. Used to show reading "
     "progress on the home page\0how far pages have been rotated as a multiple of 90 degrees\0state of the window. 1 is "
     "normal, 2 is maximized, 3 is fullscreen, 4 is minimized\0width of the bookmarks / favorites sidebar in screen "
@@ -817,8 +817,8 @@ const StructInfo gTabStateInfo = {
     "documents with chapters (see PagePosition.cpp)\0zoom (in %) or one of those values: fit page, fit width, fit "
     "height, fit content, fit visible\0how far pages have been rotated as a multiple of 90 degrees\0how far this "
     "document has been scrolled (in x and y direction)\0if true, the table of contents was shown when the document was "
-    "closed\0what the sidebar's top panel showed: bookmarks, thumbnails or favorites\0which table of contents items "
-    "were expanded (see FileStates -> TocState)",
+    "closed\0what the sidebar's top panel showed: bookmarks, thumbnails, favorites or comments\0which table of "
+    "contents items were expanded (see FileStates -> TocState)",
     false};
 
 static const FieldInfo gRect_4_Fields[] = {
@@ -1095,9 +1095,9 @@ const StructInfo gSettingsInfo = {
     "it). if empty, derived from ShowToolbar\0where the toolbar is placed: top or bottom (applies to both show and "
     "overlay modes)\0if true, the find UI is a floating, movable window with a results list instead of the compact "
     "toolbar overlay\0if true, show the sidebar's bottom panel: Favorites, unless SidebarBottomView says "
-    "otherwise\0what the sidebar's bottom panel shows: favorites (the default), bookmarks or thumbnails\0if true, "
-    "favorites within each file are sorted alphabetically by name (or page label); if false (the default), they are "
-    "sorted by page number\0if true, show the table of contents (Bookmarks) sidebar when the document has one\0if "
+    "otherwise\0what the sidebar's bottom panel shows: favorites (the default), bookmarks, thumbnails or comments\0if "
+    "true, favorites within each file are sorted alphabetically by name (or page label); if false (the default), they "
+    "are sorted by page number\0if true, show the table of contents (Bookmarks) sidebar when the document has one\0if "
     "true, every document with bookmarks opens with the Bookmarks sidebar, even one that was closed with it hidden\0if "
     "true, put the bookmarks / favorites sidebar on the right of the window (left is the default; right-to-left UI "
     "languages already put it on the right)\0valid values: (empty), keep, grow\0if true, draw a blue border around "

@@ -41,6 +41,7 @@
 #include "AnnotEditToolbar.h"
 #include "AnnotTextPopup.h"
 #include "AnnotFilterToolbar.h"
+#include "CommentsPanel.h"
 #include "FindBar.h"
 #include "FindWindow.h"
 #include "SearchAndDDE.h"
@@ -207,6 +208,7 @@ MainWindow::~MainWindow() {
     DeleteSelectionToolbar(this);
     DeleteAnnotEditToolbar(this);
     DeleteAnnotFilterToolbar(this);
+    DeleteCommentsPanel(this);
     DeleteAnnotationHoverOverlay(this);
     DeleteAnnotationTextPopup(this);
 
@@ -1067,6 +1069,7 @@ void UpdateControlsColors(MainWindow* win) {
             win->favFilterEdit->SetColors(txtCol, bgCol);
         }
     }
+    UpdateCommentsPanelColors(win);
 }
 
 bool IsRightDragging(MainWindow* win) {

@@ -11,11 +11,12 @@ enum class SidebarPanelKind {
 };
 
 // A panel of the sidebar: a header with an icon per view and a ✕, above the
-// view it shows. The views (bookmarks tree, page thumbnails, favorites tree)
-// are the window's; each is in one panel at most, and moves between them.
+// view it shows. The views (bookmarks tree, page thumbnails, favorites tree,
+// comments tree) are the window's; each is in one panel at most, and moves
+// between them.
 //
 //   +-----------------------+
-//   | [B] [T] [F]        x  |  header: B selected
+//   | [B] [T] [F] [C]    x  |  header: B selected
 //   | [search bookmarks  ]  |
 //   | tree ...              |  the view
 //   +-----------------------+

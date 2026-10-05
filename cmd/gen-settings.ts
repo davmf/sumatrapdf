@@ -1124,7 +1124,7 @@ const fileState: Field[] = [
     "SidebarView",
     Str,
     null,
-    "what the sidebar's top panel shows: bookmarks (the default), thumbnails or favorites",
+    "what the sidebar's top panel shows: bookmarks (the default), thumbnails, favorites or comments",
   ).ver("3.7"),
   field("SidebarDx", Int, 0, "width of the bookmarks / favorites sidebar in screen pixels, as last resized"),
   field("DisplayR2L", Bool, false, "if true, the document is displayed right-to-left in facing and book view modes"),
@@ -1228,7 +1228,12 @@ const tabState: Field[] = [
     "PointF",
   ),
   field("ShowToc", Bool, true, "if true, the table of contents was shown when the document was closed"),
-  field("SidebarView", Str, null, "what the sidebar's top panel showed: bookmarks, thumbnails or favorites").ver("3.7"),
+  field(
+    "SidebarView",
+    Str,
+    null,
+    "what the sidebar's top panel showed: bookmarks, thumbnails, favorites or comments",
+  ).ver("3.7"),
   compactArray("TocState", Int, null, "which table of contents items were expanded (see FileStates -> TocState)"),
 ];
 
@@ -1454,7 +1459,7 @@ const globalPrefs: Field[] = [
     "SidebarBottomView",
     Str,
     null,
-    "what the sidebar's bottom panel shows: favorites (the default), bookmarks or thumbnails",
+    "what the sidebar's bottom panel shows: favorites (the default), bookmarks, thumbnails or comments",
   ).ver("3.7"),
   field(
     "SortFavoritesByName",

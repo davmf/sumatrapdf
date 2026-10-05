@@ -90,6 +90,7 @@
 #include "SelectionToolbar.h"
 #include "AnnotEditToolbar.h"
 #include "AnnotFilterToolbar.h"
+#include "CommentsPanel.h"
 #include "ScreenshotCapture.h"
 #include "Screenshot.h"
 #include "GlobalHotkeys.h"
@@ -2614,6 +2615,7 @@ static void ReplaceDocumentInCurrentTab(LoadArgs* args, DocController* ctrl, Fil
     // (same for linkOnLastButtonDown)
     ClearTocBox(win);
     ClearSidebarThumbnails(win);
+    ClearCommentsPanel(win);
     ClearMouseState(win);
 
     if (win->ctrl) {
@@ -3272,6 +3274,7 @@ static void CreateSidebar(MainWindow* win) {
     win->sidebarBottom = CreateSidebarPanel(win, SidebarPanelKind::Bottom);
     win->favoritesTabPanel = CreateSidebarPanel(win, SidebarPanelKind::FavoritesTab);
     CreateToc(win);
+    CreateCommentsPanel(win);
 
     win->sidebarPanelsSplitter = NewFrameSplitter(SplitterType::Horiz, true);
     win->sidebarPanelsSplitter->thickness = kSplitterDy;
@@ -5452,6 +5455,7 @@ static void CloseDocumentInCurrentTab(MainWindow* win, bool keepUIEnabled, bool 
     }
     ClearTocBox(win);
     ClearSidebarThumbnails(win);
+    ClearCommentsPanel(win);
     // stop render threads before waiting on find: they hold pagesLock/renderLock
     // that the find thread needs for text extraction (issue: stress-test hang in
     // AbortFinding while RenderCacheThread holds engine locks).
@@ -8424,6 +8428,7 @@ static void ApplySidebarDpiFonts(MainWindow* win, int dpi) {
     if (win->favFilterEdit) {
         win->favFilterEdit->SetFont(appFont);
     }
+    UpdateCommentsPanelDpi(win, dpi);
     // re-layout the panels
     SidebarPanel* panels[] = {win->sidebarTop, win->sidebarBottom, win->favoritesTabPanel};
     for (SidebarPanel* p : panels) {
@@ -12774,6 +12779,10 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
 
         case CmdToggleThumbnails:
             ToggleSidebarViewCmd(win, cmd, SidebarView::Thumbnails);
+            break;
+
+        case CmdToggleComments:
+            ToggleSidebarViewCmd(win, cmd, SidebarView::Comments);
             break;
 
         case CmdExpandToCurrentPage:

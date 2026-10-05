@@ -45,6 +45,7 @@ extern "C" {
 #include "FormFields.h"
 #include "FilterHighlightDraw.h"
 #include "AnnotFilterToolbar.h"
+#include "CommentsPanel.h"
 #include "SvgIcons.h"
 #include "ImageReader.h"
 #include "CommandPalette.h"
@@ -2930,6 +2931,7 @@ void CloseAnnotationUiForTab(WindowTab* tab) {
     // been unlinked from the window, and the filter list may still be holding
     // its annotations.
     ClearAnnotFilterAnnotations(win);
+    ClearCommentsPanel(win);
 }
 
 // Clear non-owning Annotation* before the old engine is destroyed.
@@ -2969,6 +2971,7 @@ void DeleteAnnotationAndUpdateUI(WindowTab* tab, Annotation* annot) {
 void NotifyAnnotationsChanged(WindowTab* tab) {
     if (tab && tab->win) {
         UpdateAnnotFilterToolbar(tab->win);
+        RefreshCommentsPanel(tab->win);
     }
     CommandPaletteOnAnnotationsChanged();
 }
@@ -3516,6 +3519,7 @@ void SetSelectedAnnotation(WindowTab* tab, Annotation* annot) {
     ScheduleShowSelectedAnnotationView(tab);
     UpdateAnnotEditToolbar(win);
     UpdateAnnotFilterToolbar(win);
+    CommentsPanelSyncSelection(win);
 }
 
 static void AddAnnotPage(Vec<int>& pages, int pageNo, int pageCount) {
@@ -3574,6 +3578,7 @@ static void OnAnnotsProgress(WindowTab* tab) {
         return;
     }
     RefreshAnnotFilterAnnotations(tab->win);
+    RefreshCommentsPanel(tab->win);
     CommandPaletteOnAnnotationsChanged();
 }
 
@@ -3604,6 +3609,7 @@ void RefreshAnnotationLists(WindowTab* tab) {
     if (tab->win) {
         StartLoadingAnnotationsForUi(tab);
         RefreshAnnotFilterAnnotations(tab->win);
+        RefreshCommentsPanel(tab->win);
         CommandPaletteOnAnnotationsChanged();
     }
 }
@@ -3615,6 +3621,7 @@ void RefreshEditAnnotationsAfterEngineChange(WindowTab* tab) {
     if (tab->win) {
         StartLoadingAnnotationsForUi(tab);
         RefreshAnnotFilterAnnotations(tab->win);
+        RefreshCommentsPanel(tab->win);
     }
 }
 

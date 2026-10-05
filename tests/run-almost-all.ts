@@ -231,6 +231,7 @@ import { testit as movePolygonPolylineInk } from "./move-polygon-polyline-ink.ts
 import { testit as pdfEditToolbarInteraction } from "./pdf-edit-toolbar-interaction.ts";
 import { testit as annotCopyPaste } from "./annot-copy-paste.ts";
 import { testit as annotFilterCloseTab } from "./annot-filter-close-tab.ts";
+import { testit as commentsPanel } from "./comments-panel.ts";
 import { testit as annotFilterCloseWindow } from "./annot-filter-close-window.ts";
 import { testit as issue6136 } from "./issue-6136.ts";
 import { testit as issueTrimMargins } from "./issue-trim-margins.ts";
@@ -622,6 +623,7 @@ export const tests: NamedTest[] = [
   ["issue-6123", issue6123],
   ["annot-filter-syntax", annotFilterSyntax],
   ["annot-filter-close-tab", annotFilterCloseTab],
+  ["comments-panel", commentsPanel],
   ["annot-filter-close-window", annotFilterCloseWindow],
   ["issue-6136", issue6136],
   ["issue-1930", issue1930],

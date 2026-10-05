@@ -341,6 +341,7 @@ const commandsRaw = [
     "CmdToggleThumbnails", "Toggle Thumbnails",
     "CmdMergePDF", "Merge PDF...",
     "CmdReplyToAnnotation", "Reply to Comment",
+    "CmdToggleComments", "Toggle Comments",
 ];
 
 // removed slots are dropped: nothing outside the generators should see them

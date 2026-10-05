@@ -1556,6 +1556,10 @@ static TempStr UpdateCommandNameTemp(MainWindow* win, int cmdId, Str s) {
             isToggle = true;
             newIsOn = !IsSidebarViewShown(win, SidebarView::Thumbnails);
         } break;
+        case CmdToggleComments: {
+            isToggle = true;
+            newIsOn = !IsSidebarViewShown(win, SidebarView::Comments);
+        } break;
         case CmdTogglePresentationMode: {
             isToggle = true;
             newIsOn = !win->presentation;

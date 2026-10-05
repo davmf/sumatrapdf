@@ -38,6 +38,7 @@ struct AnnotMatchOpts {
 };
 
 bool ParseAnnotSearch(Str filter, AnnotMatchOpts& optsOut);
+void ParseAnnotFilterLenient(Str text, AnnotMatchOpts& opts);
 bool AnnotMatchesFields(Str author, Str contents, AnnotationType, const AnnotMatchOpts&);
 bool AnnotMatches(Annotation*, const AnnotMatchOpts&);
 void AnnotSearchContentWords(const AnnotMatchOpts&, StrVec& wordsOut);

@@ -253,20 +253,10 @@ static void RebuildList(AnnotFilterToolbar* f) {
     UpdateFloatButtons(f);
 }
 
-// Reparse the filter box. Bad syntax (a typo in a ":" condition) would match
-// nothing, which reads as "the filter is broken"; treat it as plain text
-// instead, the way it behaved before conditions existed.
+// Reparse the filter box.
 static void SetFilter(AnnotFilterToolbar* f, Str text) {
-    f->filter.Reset();
     f->filterWords.Reset();
-    if (!ParseAnnotSearch(text, f->filter)) {
-        f->filter.Reset();
-        StrVec words;
-        SplitFilterToWords(text, words);
-        for (Str w : words) {
-            AnnotSearchAddContentWord(f->filter, w);
-        }
-    }
+    ParseAnnotFilterLenient(text, f->filter);
     AnnotSearchContentWords(f->filter, f->filterWords);
 }
 

@@ -59,7 +59,7 @@ function parseRect(s: string): Rect {
   return { x: x!, y: y!, dx: dx!, dy: dy! };
 }
 
-// e.g. 1234,1,thumbnails,111,010:2,2,22,22;26,2,22,22;50,2,22,22
+// e.g. 1234,1,thumbnails,1111,0100:2,2,22,22;26,2,22,22;50,2,22,22;74,2,22,22
 function parsePanel(s: string): Panel {
   const [head, rects] = s.split(":");
   const [hwnd, visible, view, enabled, selected] = head!.split(",");
@@ -203,7 +203,7 @@ export async function testit(): Promise<void> {
     sendCommand(frame, cmdId("CmdToggleThumbnails"));
     await want("Thumbnails didn't show in the bottom panel", "bookmarks/thumbnails");
     let s = await sidebar(client);
-    if (s.bottom.enabled !== "111" || s.bottom.selected !== "010") {
+    if (s.bottom.enabled !== "1111" || s.bottom.selected !== "0100") {
       throw new Error(`sidebar-thumbnails: want all view icons, Thumbnails selected: ${s.raw}`);
     }
     sendCommand(frame, cmdId("CmdToggleBookmarks"));
@@ -220,7 +220,7 @@ export async function testit(): Promise<void> {
     await want("clicking Thumbnails on top didn't swap the panels", "thumbnails/bookmarks");
     await waitFor("clicking Thumbnails didn't repaint the sidebar", async () => frameOnScreen(await sidebar(client)));
     s = await sidebar(client);
-    if (s.hwnd !== s.top.hwnd || s.top.selected !== "010" || s.bottom.selected !== "100") {
+    if (s.hwnd !== s.top.hwnd || s.top.selected !== "0100" || s.bottom.selected !== "1000") {
       throw new Error(`sidebar-thumbnails: after the swap: ${s.raw}`);
     }
     clickIcon(s.bottom, "thumbnails");

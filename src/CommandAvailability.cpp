@@ -253,6 +253,7 @@ static UINT_PTR removeIfAnnotsNotSupported[] = {
     CmdSignWithImage,
     CmdAnnotationHighlightBrush,
     CmdFindAnnotation,
+    CmdToggleComments,
     CmdCutAnnotation,
     CmdCopyAnnotation,
     CmdPasteAnnotation,

@@ -25,6 +25,7 @@ struct TreeView;
 struct SelectionToolbar;
 struct AnnotEditToolbar;
 struct AnnotFilterToolbar;
+struct CommentsPanel;
 struct ILayout;
 struct Spacer;
 struct HwndSlot;
@@ -727,6 +728,8 @@ struct MainWindow { // NOLINT(clang-analyzer-optin.performance.Padding)
     AnnotEditToolbar* annotEditToolbar = nullptr;
     // filter box on the Edit PDF toolbar and its dropdown list
     AnnotFilterToolbar* annotFilterToolbar = nullptr;
+    // the Comments sidebar view
+    CommentsPanel* commentsPanel = nullptr;
     // session-only: pop the annotation list into a floating window (not saved)
     Rect annotListFloatPos;
     bool annotListFloatPosUserSet = false;

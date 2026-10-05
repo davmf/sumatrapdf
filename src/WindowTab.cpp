@@ -52,7 +52,7 @@ bool WindowTab::IsAboutTab() const {
 }
 
 // the SidebarView / SidebarBottomView settings
-static const char* kSidebarViewNames[kSidebarViewCount] = {"bookmarks", "thumbnails", "favorites"};
+static const char* kSidebarViewNames[kSidebarViewCount] = {"bookmarks", "thumbnails", "favorites", "comments"};
 
 SidebarView SidebarViewFromStr(Str s, SidebarView def) {
     for (int i = 0; i < kSidebarViewCount; i++) {

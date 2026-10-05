@@ -56,6 +56,7 @@
 #include "SumatraDialogs.h"
 #include "AnnotEditToolbar.h"
 #include "AnnotFilterToolbar.h"
+#include "CommentsPanel.h"
 #include "Annotation.h"
 #include "Menu.h"
 #include "EngineAll.h"
@@ -935,6 +936,7 @@ enum class ControlCmd : u16 {
     TestFrameNcStrips = 114,
     TestMergePdf = 115,
     TestWheelWhileClosing = 116,
+    TestCommentsPanel = 117,
 };
 
 enum class ControlArgType : u16 {
@@ -1235,6 +1237,17 @@ static void ExecuteControlRequest(ControlRequest* req) {
             int exitCode = 0;
             Str res = WheelWhileClosingResultTemp(&exitCode);
             AppendTestResult(req, exitCode, res);
+            break;
+        }
+
+        case ControlCmd::TestCommentsPanel: {
+            // action, arg: see CommentsPanelTestTemp()
+            if (len(gWindows) == 0 || !gWindows[0]) {
+                AppendTestResult(req, 2, StrL("NOTREADY no-window"));
+                break;
+            }
+            Str res = CommentsPanelTestTemp(gWindows[0], StringArg(req, 0), StringArg(req, 1));
+            AppendTestResult(req, 0, res);
             break;
         }
 

@@ -232,3 +232,18 @@ void AnnotSearchContentWords(const AnnotMatchOpts& opts, StrVec& wordsOut) {
         }
     }
 }
+
+// Bad syntax (a typo in a ":" condition) would match nothing, which reads as
+// "the filter is broken"; take it as plain words instead.
+void ParseAnnotFilterLenient(Str text, AnnotMatchOpts& opts) {
+    opts.Reset();
+    if (ParseAnnotSearch(text, opts)) {
+        return;
+    }
+    opts.Reset();
+    StrVec words;
+    SplitFilterToWords(text, words);
+    for (Str w : words) {
+        AnnotSearchAddContentWord(opts, w);
+    }
+}

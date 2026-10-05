@@ -52,6 +52,7 @@
 #include "ReadingAutoScroll.h"
 #include "ReadingBar.h"
 #include "TableOfContents.h"
+#include "CommentsPanel.h"
 #include "SidebarPanel.h"
 #include "Menu.h"
 
@@ -322,6 +323,10 @@ static MenuDef menuDefView[] = {
     {
         TrN("Sho&w Thumbnails"),
         CmdToggleThumbnails,
+    },
+    {
+        TrN("Show Comments"),
+        CmdToggleComments,
     },
     {
         TrN("Show Me&nu"),
@@ -1345,6 +1350,10 @@ static MenuDef menuDefContext[] = {
         CmdToggleThumbnails,
     },
     {
+        TrN("Show Comments"),
+        CmdToggleComments,
+    },
+    {
         TrN("Sh&ow Toolbar"),
         CmdToggleToolbar,
     },
@@ -2124,6 +2133,8 @@ static void MenuUpdateStateForWindow(MainWindow* win) {
     MenuSetChecked(win->menu, CmdToggleBookmarks, checked);
     MenuSetEnabled(win->menu, CmdToggleThumbnails, CanShowThumbnails(tab));
     MenuSetChecked(win->menu, CmdToggleThumbnails, IsSidebarViewShown(win, SidebarView::Thumbnails));
+    MenuSetEnabled(win->menu, CmdToggleComments, CanShowComments(tab));
+    MenuSetChecked(win->menu, CmdToggleComments, IsSidebarViewShown(win, SidebarView::Comments));
 
     MenuSetChecked(win->menu, CmdFavoriteToggle, IsSidebarViewShown(win, SidebarView::Favorites));
     MenuSetChecked(win->menu, CmdFavoriteShowInTab, FindFavoritesTab(win) != nullptr);
@@ -2440,6 +2451,8 @@ void OnWindowContextMenu(MainWindow* win, int x, int y) {
     MenuSetChecked(popup, CmdToggleBookmarks, IsSidebarViewShown(win, SidebarView::Bookmarks));
     MenuSetEnabled(popup, CmdToggleThumbnails, CanShowThumbnails(tab));
     MenuSetChecked(popup, CmdToggleThumbnails, IsSidebarViewShown(win, SidebarView::Thumbnails));
+    MenuSetEnabled(popup, CmdToggleComments, CanShowComments(tab));
+    MenuSetChecked(popup, CmdToggleComments, IsSidebarViewShown(win, SidebarView::Comments));
 
     MenuSetEnabled(popup, CmdFavoriteToggle, HasFavorites());
     MenuSetChecked(popup, CmdFavoriteToggle, IsSidebarViewShown(win, SidebarView::Favorites));

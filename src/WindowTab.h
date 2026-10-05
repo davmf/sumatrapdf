@@ -12,8 +12,9 @@ enum class SidebarView {
     Bookmarks,
     Thumbnails,
     Favorites,
+    Comments,
 };
-constexpr int kSidebarViewCount = 3;
+constexpr int kSidebarViewCount = 4;
 
 SidebarView SidebarViewFromStr(Str s, SidebarView def);
 Str SidebarViewToStr(SidebarView);
