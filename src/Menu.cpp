@@ -1312,6 +1312,10 @@ static MenuDef menuDefContext[] = {
         CmdShowAnnotationText,
     },
     {
+        TrN("&Reply to Comment"),
+        CmdReplyToAnnotation,
+    },
+    {
         TrN("Save Attachment"),
         CmdSaveAttachment,
     },
@@ -2589,6 +2593,13 @@ void OnWindowContextMenu(MainWindow* win, int x, int y) {
             Annotation* annot = ctx->annotationUnderCursor;
             if (annot) {
                 ShowAnnotationTextPopup(win, annot);
+            }
+            return;
+        }
+        case CmdReplyToAnnotation: {
+            Annotation* annot = ctx->annotationUnderCursor;
+            if (annot) {
+                ShowAnnotationTextPopup(win, annot, AnnotPopupFocus::Reply);
             }
             return;
         }

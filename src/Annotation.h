@@ -83,6 +83,8 @@ struct Annotation {
 
     EngineMupdf* engine = nullptr;
     pdf_annot* pdfannot = nullptr; // not owned
+    // /IRT reply to another annotation on the page; not drawn or hit-tested
+    bool isReply = false;
 
     Annotation() = default;
     ~Annotation() {
@@ -212,6 +214,10 @@ bool SetWidgetChoiceValue(Annotation*, Str value);
 bool ToggleFormButton(Annotation*);
 
 bool AnnotationIsLive(Annotation*);
+
+bool CanReplyToAnnotation(Annotation*);
+void GetAnnotationReplies(Annotation*, Vec<Annotation*>& out);
+Annotation* AddAnnotationReply(Annotation*, Str text);
 
 void DeleteAnnotation(Annotation*);
 bool AnnotationCanBeMoved(AnnotationType);

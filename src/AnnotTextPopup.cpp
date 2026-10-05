@@ -26,6 +26,9 @@
 #include "SumatraPDF.h"
 #include "MainWindow.h"
 #include "WindowTab.h"
+#include "Commands.h"
+#include "AnnotEditToolbar.h"
+#include "Toolbar.h"
 
 #include "AnnotTextPopup.h"
 
@@ -51,6 +54,9 @@ constexpr int kMinWidth = 120;
 constexpr int kMaxHeightPercent = 60;
 // a card shorter than this looks like a glitch, however short the comment
 constexpr int kMinLines = 3;
+// the reply box: tall enough to see a short reply whole, wide enough to type in
+constexpr int kReplyLines = 3;
+constexpr int kReplyMinChars = 40;
 
 // Native read-only edit hosted in the VirtHost; the layout slot positions its
 // HWND, the way the contents editor's does
@@ -70,7 +76,10 @@ struct AnnotTextSlot : VirtCustom {
 struct AnnotTextPopup {
     MainWindow* win = nullptr;
     VirtHost* host = nullptr;
-    Edit* edit = nullptr;
+    // read-only text of the comment and each reply, in thread order
+    Vec<Edit*> edits;
+    // where a reply is typed; null when the document can't take one
+    Edit* replyEdit = nullptr;
     PlatformFont* font = nullptr;
     // the annotation the card belongs to; it follows this one and closes when
     // the annotation, its tab or its page goes away
@@ -87,7 +96,12 @@ bool AnnotationHasText(Annotation* annot) {
     if (!AnnotationIsLive(annot)) {
         return false;
     }
-    return len(Contents(annot)) > 0;
+    if (len(Contents(annot)) > 0) {
+        return true;
+    }
+    Vec<Annotation*> replies;
+    GetAnnotationReplies(annot, replies);
+    return len(replies) > 0;
 }
 
 static Color PopupBg() {
@@ -170,12 +184,80 @@ static void QueueHide(AnnotTextPopup* popup) {
     uitask::Post(MkFunc0(PostedHidePopup, popup->win), "HideAnnotTextPopup");
 }
 
-static void OnPopupEditWndProc(AnnotTextPopup* popup, ControlBase::WndProcEvent* ev) {
-    if (!popup || !popup->edit) {
+static Edit* FindPopupEdit(AnnotTextPopup* popup, HWND hwnd) {
+    if (popup->replyEdit && popup->replyEdit->hwnd == hwnd) {
+        return popup->replyEdit;
+    }
+    for (Edit* e : popup->edits) {
+        if (e->hwnd == hwnd) {
+            return e;
+        }
+    }
+    return nullptr;
+}
+
+// focus moving to another edit or the button row stays in the card
+static bool FocusStaysInPopup(AnnotTextPopup* popup, HWND next) {
+    HWND host = popup->host->native;
+    return next && (next == host || IsChild(host, next));
+}
+
+// a click on the card's background or button gives the focus to the host;
+// hand it back to an edit so the next click outside still closes the card
+static void PostedRefocusPopup(MainWindow* win) {
+    AnnotTextPopup* popup = win ? win->annotTextPopup : nullptr;
+    if (!popup || popup->closing || !popup->host->IsVisible()) {
         return;
     }
-    if (ev->msg == WM_CHAR && ev->wparam == VK_ESCAPE) {
-        // eat it so the edit doesn't beep after KEYDOWN queued the close
+    if (GetFocus() != popup->host->native) {
+        return;
+    }
+    Edit* e = popup->replyEdit ? popup->replyEdit : (len(popup->edits) > 0 ? popup->edits[0] : nullptr);
+    if (e) {
+        e->SetFocus();
+    }
+}
+
+static void PostedSubmitReply(MainWindow* win) {
+    AnnotTextPopup* popup = win ? win->annotTextPopup : nullptr;
+    if (!popup || !popup->replyEdit || !popup->host->IsVisible()) {
+        return;
+    }
+    TempStr text = popup->replyEdit->GetTextTemp();
+    str::NormalizeNewlinesToLFInPlace(text);
+    Annotation* annot = popup->annot;
+    WindowTab* tab = popup->tab;
+    if (!AddAnnotationReply(annot, text)) {
+        return;
+    }
+    RefreshAnnotationLists(tab);
+    NotifyAnnotationsChanged(tab);
+    ToolbarUpdateStateForWindow(win, false);
+    // rebuilt with the new reply at the end and an empty box under it
+    ShowAnnotationTextPopup(win, annot, AnnotPopupFocus::Reply);
+}
+
+// posted: rebuilding the card deletes the edit whose key press asked for it
+static void QueueSubmitReply(AnnotTextPopup* popup) {
+    if (!popup || popup->closing || !popup->win) {
+        return;
+    }
+    uitask::Post(MkFunc0(PostedSubmitReply, popup->win), "SubmitAnnotReply");
+}
+
+static void OnReplyClick(AnnotTextPopup* popup, VirtMouseEvent*) {
+    QueueSubmitReply(popup);
+}
+
+static void OnPopupEditWndProc(AnnotTextPopup* popup, ControlBase::WndProcEvent* ev) {
+    Edit* edit = popup ? FindPopupEdit(popup, ev->hwnd) : nullptr;
+    if (!edit) {
+        return;
+    }
+    bool isReply = edit == popup->replyEdit;
+    // Ctrl+Enter arrives as WM_CHAR LF; eat it like Esc so neither beeps nor
+    // inserts text after KEYDOWN acted on it
+    if (ev->msg == WM_CHAR && (ev->wparam == VK_ESCAPE || (isReply && ev->wparam == 0x0A))) {
         ev->didHandle = true;
         ev->result = 0;
         return;
@@ -186,19 +268,31 @@ static void OnPopupEditWndProc(AnnotTextPopup* popup, ControlBase::WndProcEvent*
         QueueHide(popup);
         return;
     }
-    if (ev->msg == WM_KILLFOCUS) {
-        // clicking anywhere else dismisses the card
-        QueueHide(popup);
+    if (isReply && ev->msg == WM_KEYDOWN && ev->wparam == VK_RETURN && IsCtrlPressed()) {
+        ev->didHandle = true;
+        ev->result = 0;
+        QueueSubmitReply(popup);
+        return;
     }
-    popup->edit->WndProc(ev);
+    if (ev->msg == WM_KILLFOCUS) {
+        HWND next = (HWND)ev->wparam;
+        if (!FocusStaysInPopup(popup, next)) {
+            // clicking anywhere else dismisses the card
+            QueueHide(popup);
+        } else if (next == popup->host->native) {
+            uitask::Post(MkFunc0(PostedRefocusPopup, popup->win), "RefocusAnnotTextPopup");
+        }
+    }
+    edit->WndProc(ev);
 }
 
 static void OnPopupNativeMsg(AnnotTextPopup* popup, VirtHostNativeMsg* ev) {
-    if (!popup || !popup->edit || !popup->edit->hwnd) {
+    Edit* edit = popup ? FindPopupEdit(popup, (HWND)ev->lp) : nullptr;
+    if (!edit) {
         return;
     }
-    if (ev->msg == WM_COMMAND && (HWND)ev->lp == popup->edit->hwnd) {
-        popup->edit->DispatchCommand(ev->wp, ev->lp);
+    if (ev->msg == WM_COMMAND) {
+        edit->DispatchCommand(ev->wp, ev->lp);
         ev->didHandle = true;
         ev->res = 0;
         return;
@@ -207,10 +301,8 @@ static void OnPopupNativeMsg(AnnotTextPopup* popup, VirtHostNativeMsg* ev) {
     // Without reflecting it back the edit inherits the card's background and
     // the text field stops looking like one.
     if (ev->msg == WM_CTLCOLOREDIT || ev->msg == WM_CTLCOLORSTATIC) {
-        if ((HWND)ev->lp == popup->edit->hwnd) {
-            ev->res = popup->edit->DispatchMessageReflect(ev->msg, ev->wp, ev->lp);
-            ev->didHandle = ev->res != 0;
-        }
+        ev->res = edit->DispatchMessageReflect(ev->msg, ev->wp, ev->lp);
+        ev->didHandle = ev->res != 0;
     }
 }
 
@@ -310,57 +402,160 @@ static AnnotPopupHeader* MakePopupHeader(AnnotTextPopup* popup, Annotation* anno
     return h;
 }
 
-static void BuildPopup(AnnotTextPopup* popup, Annotation* annot) {
+// read-only and frameless on the card's background: a comment to read, not
+// a text field to type into
+static Edit* NewTextEdit(AnnotTextPopup* popup) {
+    Edit::CreateArgs args;
+    args.parent = popup->host->native;
+    args.isMultiLine = true;
+    args.withFrame = false;
+    // the themed edit draws its own border; we want bare text
+    args.noTheme = true;
+    args.idealSizeLines = 6;
+    args.textPadding = 0;
+    args.font = popup->font;
+    args.isRtl = IsUIRtl();
+    auto* edit = new Edit();
+    edit->SetColors(PopupText(), PopupBg());
+    if (!edit->Create(args)) {
+        delete edit;
+        return nullptr;
+    }
+    // read-only, so the card can never edit the document by accident
+    SendMessageW(edit->hwnd, EM_SETREADONLY, TRUE, 0);
+    edit->onWndProc = MkFunc1(OnPopupEditWndProc, popup);
+    return edit;
+}
+
+static Edit* NewReplyEdit(AnnotTextPopup* popup) {
+    Edit::CreateArgs args;
+    args.parent = popup->host->native;
+    args.isMultiLine = true;
+    args.withFrame = true;
+    args.idealSizeLines = kReplyLines;
+    args.textPadding = 3;
+    args.font = popup->font;
+    args.isRtl = IsUIRtl();
+    auto* edit = new Edit();
+    Color bg = IsLightColor(PopupBg()) ? MkRgb(255, 255, 255) : ThemeWindowControlBackgroundColor();
+    edit->SetColors(PopupText(), bg);
+    if (!edit->Create(args)) {
+        delete edit;
+        return nullptr;
+    }
+    edit->onWndProc = MkFunc1(OnPopupEditWndProc, popup);
+    return edit;
+}
+
+// Gives the edit its final width so the text wraps the way it will be read,
+// then sizes it to the line count that came to, within [minLines, maxDy].
+static AnnotTextSlot* MakeTextSlot(Edit* edit, int textDx, int maxDy, int minLines) {
+    edit->idealDx = textDx;
+    edit->SetBounds(Rect(0, 0, textDx, maxDy));
+    edit->idealSizeLines = 1;
+    int lineDy = edit->GetIdealSize().dy;
+    int nLines = (int)SendMessageW(edit->hwnd, EM_GETLINECOUNT, 0, 0);
+    int maxLines = lineDy > 0 ? std::max(maxDy / lineDy, minLines) : minLines;
+    edit->idealSizeLines = std::max(minLines, std::min(nLines, maxLines));
+    int textDy = std::min(edit->GetIdealSize().dy, maxDy);
+    // a multi-line edit always has WS_VSCROLL; show the bar only when the
+    // text really is taller than its share of the card
+    bool scrolls = nLines > maxLines;
+    ShowScrollBar(edit->hwnd, SB_VERT, scrolls);
+    // the bar takes its width from the text: widen so lines wrap as counted
+    auto* slot = new AnnotTextSlot();
+    slot->edit = edit;
+    slot->idealSize = {scrolls ? textDx + DpiGetSystemMetrics(SM_CXVSCROLL) : textDx, textDy};
+    return slot;
+}
+
+// one comment of the thread: its header, and its text when it has any
+struct ThreadEntry {
+    AnnotPopupHeader* header = nullptr;
+    Edit* edit = nullptr;
+};
+
+// The comment, then its replies, each under an author / date header, then a
+// box to type a reply into when the document can take one.
+static void BuildPopup(AnnotTextPopup* popup, Annotation* annot, bool canReply) {
     int margin = DpiScale(kMargin);
-    auto* header = MakePopupHeader(popup, annot);
+    Vec<Annotation*> thread;
+    VecAppend(thread, annot);
+    GetAnnotationReplies(annot, thread);
 
-    // CRLF is what a win32 edit expects; annotation text uses bare LF
-    TempStr s = str::DupTemp(Contents(annot));
-    str::NormalizeNewlinesToLFInPlace(s);
-    int lineDx = LongestLineDx(popup->font, s);
-    s = str::LFToCRLFTemp(s);
-    popup->edit->SetText(s);
+    // CRLF is what a win32 edit expects; annotation text uses bare LF.
+    // The card is as wide as the longest line or header of any of them.
+    Vec<ThreadEntry> entries;
+    int contentDx = 0;
+    for (Annotation* a : thread) {
+        ThreadEntry entry;
+        entry.header = MakePopupHeader(popup, a);
+        contentDx = std::max(contentDx, entry.header->idealSize.dx);
+        TempStr s = str::DupTemp(Contents(a));
+        str::NormalizeNewlinesToLFInPlace(s);
+        if (len(s) > 0) {
+            entry.edit = NewTextEdit(popup);
+        }
+        if (entry.edit) {
+            contentDx = std::max(contentDx, LongestLineDx(popup->font, s));
+            entry.edit->SetText(str::LFToCRLFTemp(s));
+            VecAppend(popup->edits, entry.edit);
+        }
+        VecAppend(entries, entry);
+    }
+    if (canReply) {
+        popup->replyEdit = NewReplyEdit(popup);
+        contentDx = std::max(contentDx, popup->font->averageCharWidth * kReplyMinChars);
+    }
 
-    // as wide as the longest line or the header, capped at kMaxLineChars; the
-    // extra px keeps the edit from wrapping a line that measured exactly
+    // capped at kMaxLineChars; the extra px keeps the edit from wrapping a
+    // line that measured exactly
+    Edit* anyEdit = len(popup->edits) > 0 ? popup->edits[0] : popup->replyEdit;
+    LRESULT margins = anyEdit ? SendMessageW(anyEdit->hwnd, EM_GETMARGINS, 0, 0) : 0;
     int maxLineDx = popup->font->averageCharWidth * kMaxLineChars;
-    LRESULT margins = SendMessageW(popup->edit->hwnd, EM_GETMARGINS, 0, 0);
-    int textDx = std::max(lineDx, header->idealSize.dx);
-    textDx = std::min(textDx, maxLineDx) + LOWORD(margins) + HIWORD(margins) + DpiScale(2);
+    int textDx = std::min(contentDx, maxLineDx) + LOWORD(margins) + HIWORD(margins) + DpiScale(2);
     textDx = std::max(textDx, DpiScale(kMinWidth));
     textDx = std::min(textDx, PopupMaxWidth(popup->win) - (2 * margin));
-    header->idealSize.dx = textDx;
-
-    popup->edit->idealDx = textDx;
-    auto* slot = new AnnotTextSlot();
-    slot->edit = popup->edit;
-
-    // The card grows to the comment instead of showing a fixed number of
-    // lines: give the edit its final width so the text wraps the way it will
-    // be read, then ask it how many lines that came to.
-    Rect canvas = HwndClientRect(popup->win->hwndCanvas);
-    int maxTextDy = std::max(canvas.dy * kMaxHeightPercent / 100, DpiScale(80));
-    popup->edit->SetBounds(Rect(0, 0, textDx, maxTextDy));
-    popup->edit->idealSizeLines = 1;
-    int lineDy = popup->edit->GetIdealSize().dy;
-    int nLines = (int)SendMessageW(popup->edit->hwnd, EM_GETLINECOUNT, 0, 0);
-    int maxLines = lineDy > 0 ? std::max(maxTextDy / lineDy, kMinLines) : kMinLines;
-    popup->edit->idealSizeLines = std::max(kMinLines, std::min(nLines, maxLines));
-    int textDy = std::min(popup->edit->GetIdealSize().dy, maxTextDy);
-    // a multi-line edit always has WS_VSCROLL; show the bar only when the
-    // comment really is taller than the card
-    bool scrolls = nLines > maxLines;
-    ShowScrollBar(popup->edit->hwnd, SB_VERT, scrolls);
-    // the bar takes its width from the text: widen so lines wrap as counted
-    int slotDx = scrolls ? textDx + DpiGetSystemMetrics(SM_CXVSCROLL) : textDx;
-    slot->idealSize = {slotDx, textDy};
 
     auto* column = new VBox();
     column->alignMain = MainAxisAlign::MainStart;
     column->alignCross = CrossAxisAlign::Stretch;
     column->gap = DpiScale(kGap);
-    column->AddChild(header);
-    column->AddChild(slot);
+
+    // The card grows to the thread instead of showing a fixed number of
+    // lines. Each text gets an equal share of the height budget and scrolls
+    // past it; a lone comment keeps its kMinLines look.
+    Rect canvas = HwndClientRect(popup->win->hwndCanvas);
+    int maxTextDy = std::max(canvas.dy * kMaxHeightPercent / 100, DpiScale(80));
+    int nEdits = std::max(len(popup->edits), 1);
+    int editMaxDy = std::max(maxTextDy / nEdits, DpiScale(40));
+    int minLines = len(entries) == 1 ? kMinLines : 1;
+    for (ThreadEntry& entry : entries) {
+        entry.header->idealSize.dx = textDx;
+        column->AddChild(entry.header);
+        if (entry.edit) {
+            column->AddChild(MakeTextSlot(entry.edit, textDx, editMaxDy, minLines));
+        }
+    }
+
+    if (popup->replyEdit) {
+        popup->replyEdit->idealDx = textDx;
+        auto* slot = new AnnotTextSlot();
+        slot->edit = popup->replyEdit;
+        slot->idealSize = {textDx, popup->replyEdit->GetIdealSize().dy};
+        column->AddChild(slot);
+
+        DpiSetFromHwnd(popup->host->native);
+        auto* btn = new VirtButton(Tr("Reply (Ctrl+Enter)"), popup->font);
+        btn->SetIsDefault(true);
+        btn->textPadding = DpiScaledInsets(2, 10);
+        btn->onClick = MkFunc1(OnReplyClick, popup);
+        auto* row = new HBox();
+        row->alignMain = MainAxisAlign::MainEnd;
+        row->alignCross = CrossAxisAlign::CrossCenter;
+        row->AddChild(btn);
+        column->AddChild(row);
+    }
 
     auto* content = new Padding(column, Insets{margin, margin, margin, margin});
     popup->size = popup->host->SetLayoutSizedToContent(content);
@@ -413,8 +608,24 @@ static bool PositionPopup(AnnotTextPopup* popup) {
     return true;
 }
 
-bool ShowAnnotationTextPopup(MainWindow* win, Annotation* annot) {
-    if (!win || !win->hwndCanvas || !win->AsFixed() || !AnnotationHasText(annot)) {
+// a reply goes into the document, so it needs one we may change and save
+static bool PopupCanReply(Annotation* annot) {
+    return CanAccessDisk() && CanReplyToAnnotation(annot);
+}
+
+static void DeletePopupEdits(AnnotTextPopup* popup) {
+    DeleteVecMembers(popup->edits);
+    delete popup->replyEdit;
+    popup->replyEdit = nullptr;
+}
+
+bool ShowAnnotationTextPopup(MainWindow* win, Annotation* annot, AnnotPopupFocus focus) {
+    if (!win || !win->hwndCanvas || !win->AsFixed() || !AnnotationIsLive(annot)) {
+        return false;
+    }
+    bool canReply = PopupCanReply(annot);
+    bool wantsReply = focus == AnnotPopupFocus::Reply && canReply;
+    if (!wantsReply && !AnnotationHasText(annot)) {
         return false;
     }
     AnnotTextPopup* popup = GetOrCreatePopup(win);
@@ -422,32 +633,9 @@ bool ShowAnnotationTextPopup(MainWindow* win, Annotation* annot) {
         return false;
     }
     HideAnnotationTextPopup(win); // start from a clean card, keep the host
-
-    Edit::CreateArgs args;
-    args.parent = popup->host->native;
-    args.isMultiLine = true;
-    // no frame and the card's own background: this is a comment to read, not
-    // a text field to type into
-    args.withFrame = false;
-    // the themed edit draws its own border; we want bare text
-    args.noTheme = true;
-    args.idealSizeLines = 6;
-    args.textPadding = 0;
-    args.font = popup->font;
-    args.isRtl = IsUIRtl();
-    auto* edit = new Edit();
-    edit->SetColors(PopupText(), PopupBg());
-    if (!edit->Create(args)) {
-        delete edit;
-        return false;
-    }
-    // read-only, so the card can never edit the document by accident
-    SendMessageW(edit->hwnd, EM_SETREADONLY, TRUE, 0);
-    edit->onWndProc = MkFunc1(OnPopupEditWndProc, popup);
-    popup->edit = edit;
     popup->closing = false;
 
-    BuildPopup(popup, annot);
+    BuildPopup(popup, annot, canReply);
     if (!PositionPopup(popup)) {
         HideAnnotationTextPopup(win);
         return false;
@@ -457,9 +645,15 @@ bool ShowAnnotationTextPopup(MainWindow* win, Annotation* annot) {
     popup->host->Show(true);
     popup->host->Invalidate(false);
     SetActiveWindow(popup->host->native);
-    edit->SetFocus();
-    // the caret belongs at the start: this is text to read, not to replace
-    SendMessageW(edit->hwnd, EM_SETSEL, 0, 0);
+    Edit* edit = len(popup->edits) > 0 ? popup->edits[0] : nullptr;
+    if (!edit || (wantsReply && popup->replyEdit)) {
+        edit = popup->replyEdit;
+    }
+    if (edit) {
+        edit->SetFocus();
+        // the caret belongs at the start: this is text to read, not to replace
+        SendMessageW(edit->hwnd, EM_SETSEL, 0, 0);
+    }
     return true;
 }
 
@@ -469,10 +663,9 @@ void HideAnnotationTextPopup(MainWindow* win) {
         return;
     }
     popup->host->Show(false);
-    // the layout owns the slot, which only borrows the edit's HWND
+    // the layout owns the slots, which only borrow the edits' HWNDs
     popup->host->SetLayout(nullptr);
-    delete popup->edit;
-    popup->edit = nullptr;
+    DeletePopupEdits(popup);
     popup->annot = nullptr;
     popup->tab = nullptr;
     popup->annotBounds = {};
@@ -508,7 +701,7 @@ void DeleteAnnotationTextPopup(MainWindow* win) {
     win->annotTextPopup = nullptr;
     win->UnregisterOnWindowMoved(&popup->onWindowMoved);
     popup->host->SetLayout(nullptr);
-    delete popup->edit;
+    DeletePopupEdits(popup);
     delete popup->host;
     delete popup;
 }

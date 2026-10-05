@@ -534,7 +534,7 @@ CommandVisibility GetCommandVisibility(int cmdId, const AppCommandCtx& ctx, Comm
         // context menu keeps the page element under the cursor; palette dispatch
         // has none, so these would no-op
         if (cmdId == CmdCopyImage || cmdId == CmdCopyLinkTarget || cmdId == CmdCopyComment ||
-            cmdId == CmdShowAnnotationText) {
+            cmdId == CmdShowAnnotationText || cmdId == CmdReplyToAnnotation) {
             return CommandVisibility::Hide;
         }
         if (cmdId == CmdFixDefaultApp) {
@@ -888,6 +888,9 @@ CommandVisibility GetCommandVisibility(int cmdId, const AppCommandCtx& ctx, Comm
         return CommandVisibility::Hide;
     }
     if (!ctx.cursorOnComment && (cmdId == CmdCopyComment || cmdId == CmdShowAnnotationText)) {
+        return CommandVisibility::Hide;
+    }
+    if (cmdId == CmdReplyToAnnotation && !(CanAccessDisk() && CanReplyToAnnotation(ctx.annotationUnderCursor))) {
         return CommandVisibility::Hide;
     }
     if (!ctx.cursorOnImage && cmdId == CmdCopyImage) {

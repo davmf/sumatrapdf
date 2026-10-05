@@ -6232,6 +6232,8 @@ static void RebuildCommentsFromAnnotationsInner(fz_context* ctx, pdf_annot* anno
     }
 }
 
+static bool PdfAnnotIsReply(fz_context* ctx, pdf_annot* a);
+
 static void RebuildCommentsFromAnnotations(fz_context* ctx, FzPageInfo* pageInfo) {
     DeleteVecMembers(pageInfo->comments);
 
@@ -6247,7 +6249,10 @@ static void RebuildCommentsFromAnnotations(fz_context* ctx, FzPageInfo* pageInfo
     pdf_annot* annot;
     for (annot = pdf_first_annot(ctx, pdfpage); annot; annot = pdf_next_annot(ctx, annot)) {
         fz_try(ctx) {
-            RebuildCommentsFromAnnotationsInner(ctx, annot, pageNo, comments);
+            // a reply has no icon to hover; its parent's card shows it
+            if (!PdfAnnotIsReply(ctx, annot)) {
+                RebuildCommentsFromAnnotationsInner(ctx, annot, pageNo, comments);
+            }
         }
         fz_catch(ctx) {
             fz_report_error(ctx);
@@ -10427,6 +10432,10 @@ Annotation* EngineMupdfGetAnnotationAtPos(EngineBase* engine, int pageNo, PointF
     Vec<Annotation*> els;
     for (auto& annot : pi->annotations) {
         auto& atp = annot->type;
+        // replies are part of their parent's card, not on the page
+        if (annot->isReply) {
+            continue;
+        }
         RectF bounds = annot->bounds;
         bounds.Inflate(padding, padding);
         if (!bounds.Contains(pos)) {
@@ -10716,6 +10725,26 @@ RectF PdfAnnotBounds(fz_context* ctx, pdf_annot* a) {
     return ToRectF(fz_expand_rect(r, pdf_annot_border(ctx, a) / 2));
 }
 
+// A /Text annotation with /IRT pointing at an annotation on the same page is a
+// reply: shown in its parent's comment card, not as an icon. /RT /Group is a
+// grouping, not a reply. Must be called inside fz_try.
+static bool PdfAnnotIsReply(fz_context* ctx, pdf_annot* a) {
+    if (pdf_annot_type(ctx, a) != PDF_ANNOT_TEXT) {
+        return false;
+    }
+    pdf_obj* obj = pdf_annot_obj(ctx, a);
+    pdf_obj* irt = pdf_dict_get(ctx, obj, PDF_NAME(IRT));
+    if (!pdf_is_indirect(ctx, irt) || !pdf_is_dict(ctx, irt)) {
+        return false;
+    }
+    if (pdf_name_eq(ctx, pdf_dict_get(ctx, obj, PDF_NAME(RT)), PDF_NAME(Group))) {
+        return false;
+    }
+    pdf_page* page = pdf_annot_page(ctx, a);
+    pdf_obj* annots = page ? pdf_dict_get(ctx, page->obj, PDF_NAME(Annots)) : nullptr;
+    return pdf_array_find(ctx, annots, irt) >= 0;
+}
+
 // creates Annotation wrapper around pdf_annot
 Annotation* MakeAnnotationWrapper(EngineMupdf* engine, pdf_annot* annot, int pageNo) {
     ReportIf(pageNo < 1);
@@ -10724,12 +10753,18 @@ Annotation* MakeAnnotationWrapper(EngineMupdf* engine, pdf_annot* annot, int pag
 
     AnnotationType typ = AnnotationType::Unknown;
     RectF bounds;
+    bool isReply = false;
 
     fz_context* ctx = engine->Ctx();
     fz_try(ctx) {
         auto tp = pdf_annot_type(ctx, annot);
         bounds = PdfAnnotBounds(ctx, annot);
         typ = AnnotationTypeFromPdfAnnot(tp);
+        isReply = PdfAnnotIsReply(ctx, annot);
+        if (isReply) {
+            // not saved: only keeps mupdf from drawing it
+            pdf_set_annot_hidden_for_editing(ctx, annot, 1);
+        }
     }
     fz_catch(ctx) {
         fz_report_error(ctx);
@@ -10747,6 +10782,7 @@ Annotation* MakeAnnotationWrapper(EngineMupdf* engine, pdf_annot* annot, int pag
     res->pdfannot = annot;
     res->bounds = bounds;
     res->type = typ;
+    res->isReply = isReply;
     return res;
 }
 

@@ -11,9 +11,15 @@ struct Annotation;
 // true if annot has text worth opening the popup for
 bool AnnotationHasText(Annotation*);
 
+// which of the card's edits gets the focus
+enum class AnnotPopupFocus {
+    Text,
+    Reply,
+};
+
 // shows the popup for annot, anchored to it. Returns false if there is
 // nothing to show.
-bool ShowAnnotationTextPopup(MainWindow*, Annotation*);
+bool ShowAnnotationTextPopup(MainWindow*, Annotation*, AnnotPopupFocus focus = AnnotPopupFocus::Text);
 void HideAnnotationTextPopup(MainWindow*);
 bool IsAnnotationTextPopupShown(MainWindow*);
 bool IsAnnotationTextPopupShownFor(MainWindow*, Annotation*);

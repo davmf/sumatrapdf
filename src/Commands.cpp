@@ -338,6 +338,7 @@ static SeqStrings gCommandNames =
     "CmdInsertTextSnippet\0"
     "CmdToggleThumbnails\0"
     "CmdMergePDF\0"
+    "CmdReplyToAnnotation\0"
     "\0";
 
 static i32 gCommandIds[] = {
@@ -665,6 +666,7 @@ static i32 gCommandIds[] = {
     CmdInsertTextSnippet,
     CmdToggleThumbnails,
     CmdMergePDF,
+    CmdReplyToAnnotation,
 };
 
 SeqStrings gCommandDescriptions =
@@ -992,6 +994,7 @@ SeqStrings gCommandDescriptions =
     "Insert Text Snippet\0"
     "Toggle Thumbnails\0"
     "Merge PDF...\0"
+    "Reply to Comment\0"
     "\0";
 
 SeqStrings gCommandAltDescs =

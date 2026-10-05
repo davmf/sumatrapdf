@@ -2943,8 +2943,22 @@ void DeleteAnnotationAndUpdateUI(WindowTab* tab, Annotation* annot) {
     }
     Annotation* keepSelected = annot == tab->selectedAnnotation ? nullptr : tab->selectedAnnotation;
 
-    DetachAnnotationFromUI(annot);
-    DeleteAnnotation(annot);
+    // replies go with the comment they answer; left behind they'd be hidden
+    // orphans. One undo step brings the whole thread back.
+    Vec<Annotation*> replies;
+    GetAnnotationReplies(annot, replies);
+    {
+        AutoEndEngineOperation op((EngineBase*)annot->engine, "Delete annotation");
+        for (Annotation* reply : replies) {
+            if (reply == keepSelected) {
+                keepSelected = nullptr;
+            }
+            DetachAnnotationFromUI(reply);
+            DeleteAnnotation(reply);
+        }
+        DetachAnnotationFromUI(annot);
+        DeleteAnnotation(annot);
+    }
     RefreshAnnotationLists(tab);
     SetSelectedAnnotation(tab, keepSelected);
     if (IsMainWindowValidAndNotClosing(tab->win)) {

@@ -7,6 +7,7 @@
 #include "base/AutoWin.h"
 #include "base/HtmlTags.h"
 #include "base/CssParser.h"
+#include "base/GuessFileType.h"
 
 extern "C" {
 #include <mupdf/pdf.h>
@@ -17,6 +18,7 @@ extern "C" {
 #include "Settings.h"
 #include "DocController.h"
 #include "EngineBase.h"
+#include "EngineAll.h"
 #include "EngineMupdf.h"
 #include "AppSettings.h"
 #include "Commands.h"
@@ -2260,6 +2262,23 @@ bool AnnotationSupportsOpacity(AnnotationType tp) {
     return IsAnnotationInList(tp, supportsOpacity, dimofi(supportsOpacity));
 }
 
+// the user's name, or the defaultAuthor setting; none for "(none)".
+// Must be called inside fz_try.
+static void SetDefaultAuthor(fz_context* ctx, pdf_annot* annot) {
+    if (!pdf_annot_has_author(ctx, annot)) {
+        return;
+    }
+    Str defAuthor = gSettings->annotations.defaultAuthor;
+    if (str::Eq(defAuthor, StrL("(none)"))) {
+        return;
+    }
+    Str author = GetUserTemp();
+    if (!str::IsEmptyOrWhiteSpace(defAuthor)) {
+        author = defAuthor;
+    }
+    pdf_set_annot_author(ctx, annot, CStrTemp(author));
+}
+
 Annotation* EngineMupdfCreateAnnotation(EngineBase* engine, int pageNo, PointF pos, AnnotCreateArgs* args) {
     static const float black[3] = {0, 0, 0};
 
@@ -2321,17 +2340,7 @@ Annotation* EngineMupdfCreateAnnotation(EngineBase* engine, int pageNo, PointF p
             annot = pdf_create_annot(ctx, page, atyp);
 
             pdf_set_annot_modification_date(ctx, annot, time(nullptr));
-            if (pdf_annot_has_author(ctx, annot)) {
-                Str defAuthor = gSettings->annotations.defaultAuthor;
-                // if "(none)" we don't set it
-                if (!str::Eq(defAuthor, StrL("(none)"))) {
-                    Str author = GetUserTemp();
-                    if (!str::IsEmptyOrWhiteSpace(defAuthor)) {
-                        author = defAuthor;
-                    }
-                    pdf_set_annot_author(ctx, annot, CStrTemp(author));
-                }
-            }
+            SetDefaultAuthor(ctx, annot);
 
             switch (typ) {
                 case AnnotationType::Link:
@@ -2596,6 +2605,129 @@ Annotation* EngineMupdfCreateAnnotation(EngineBase* engine, int pageNo, PointF p
         SetOpacity(res, (args->opacity * 255) / 100);
     }
     pdf_drop_annot(ctx, annot);
+    return res;
+}
+
+// markup annotations (comments, highlights, shapes...) take /IRT replies
+bool CanReplyToAnnotation(Annotation* annot) {
+    if (!AnnotationIsLive(annot) || annot->isReply) {
+        return false;
+    }
+    EngineMupdf* e = annot->engine;
+    auto* ctx = e->Ctx();
+    AutoUnlockRecursiveMutex cs(&e->docLock);
+    bool ok = false;
+    fz_try(ctx) {
+        // a direct (inline) dict has no object number for /IRT to point at
+        pdf_annot* a = annot->pdfannot;
+        ok = pdf_annot_has_in_reply_to(ctx, a) && pdf_is_indirect(ctx, pdf_annot_obj(ctx, a));
+    }
+    fz_catch(ctx) {
+        fz_report_error(ctx);
+        ok = false;
+    }
+    return ok;
+}
+
+// object number of the annotation a reply answers, 0 if none.
+// Must be called inside fz_try.
+static int PdfAnnotIrtNum(fz_context* ctx, pdf_annot* a) {
+    pdf_obj* irt = pdf_dict_get(ctx, pdf_annot_obj(ctx, a), PDF_NAME(IRT));
+    return pdf_is_indirect(ctx, irt) ? pdf_to_num(ctx, irt) : 0;
+}
+
+// depth-first, so a reply to a reply follows the one it answers
+static void CollectReplies(fz_context* ctx, const Vec<Annotation*>& pageAnnots, int parentNum, Vec<Annotation*>& out) {
+    for (Annotation* a : pageAnnots) {
+        if (!a->isReply || !a->pdfannot || VecContains(out, a)) {
+            continue;
+        }
+        if (PdfAnnotIrtNum(ctx, a->pdfannot) != parentNum) {
+            continue;
+        }
+        VecAppend(out, a);
+        CollectReplies(ctx, pageAnnots, pdf_to_num(ctx, pdf_annot_obj(ctx, a->pdfannot)), out);
+    }
+}
+
+// the thread under annot, in the order it was written
+void GetAnnotationReplies(Annotation* annot, Vec<Annotation*>& out) {
+    if (!AnnotationIsLive(annot)) {
+        return;
+    }
+    EngineMupdf* e = annot->engine;
+    Vec<Annotation*> pageAnnots;
+    {
+        AutoUnlockRecursiveMutex scope(&e->pagesLock);
+        FzPageInfo* pageInfo = e->PageInfoByPageNo(annot->pageNo);
+        if (!pageInfo) {
+            return;
+        }
+        for (Annotation* a : pageInfo->annotations) {
+            VecAppend(pageAnnots, a);
+        }
+    }
+    auto* ctx = e->Ctx();
+    AutoUnlockRecursiveMutex cs(&e->docLock);
+    fz_try(ctx) {
+        CollectReplies(ctx, pageAnnots, pdf_to_num(ctx, pdf_annot_obj(ctx, annot->pdfannot)), out);
+    }
+    fz_catch(ctx) {
+        fz_report_error(ctx);
+    }
+}
+
+// A /Text annotation with /IRT, the way Acrobat writes replies: same /Rect as
+// the parent, no popup of its own.
+Annotation* AddAnnotationReply(Annotation* parent, Str text) {
+    if (!CanReplyToAnnotation(parent) || str::IsEmptyOrWhiteSpace(text)) {
+        return nullptr;
+    }
+    EngineMupdf* e = parent->engine;
+    auto* ctx = e->Ctx();
+    AutoEndEngineOperation op(e, "Reply to annotation");
+
+    pdf_annot* annot = nullptr;
+    pdf_page* page = nullptr;
+    {
+        AutoUnlockRecursiveMutex cs(&e->docLock);
+        fz_var(annot);
+        fz_var(page);
+        fz_try(ctx) {
+            pdf_annot* pa = parent->pdfannot;
+            page = pdf_annot_page(ctx, pa);
+            annot = pdf_create_annot_raw(ctx, page, PDF_ANNOT_TEXT);
+            pdf_set_annot_flags(ctx, annot, PDF_ANNOT_IS_PRINT | PDF_ANNOT_IS_NO_ZOOM | PDF_ANNOT_IS_NO_ROTATE);
+            pdf_set_annot_rect(ctx, annot, pdf_annot_rect(ctx, pa));
+            pdf_dict_put(ctx, pdf_annot_obj(ctx, annot), PDF_NAME(IRT), pdf_annot_obj(ctx, pa));
+            pdf_set_annot_contents(ctx, annot, CStrTemp(text));
+            time_t now = time(nullptr);
+            pdf_set_annot_creation_date(ctx, annot, now);
+            pdf_set_annot_modification_date(ctx, annot, now);
+            SetDefaultAuthor(ctx, annot);
+            pdf_update_annot(ctx, annot);
+        }
+        fz_catch(ctx) {
+            fz_report_error(ctx);
+            if (annot) {
+                if (page) {
+                    pdf_delete_annot(ctx, page, annot);
+                }
+                pdf_drop_annot(ctx, annot);
+                annot = nullptr;
+            }
+        }
+        if (!annot) {
+            return nullptr;
+        }
+    }
+
+    auto* res = MakeAnnotationWrapper(e, annot, parent->pageNo);
+    pdf_drop_annot(ctx, annot);
+    if (!res) {
+        return nullptr;
+    }
+    MarkNotificationAsModified(e, res, AnnotationChange::Add);
     return res;
 }
 
@@ -3006,3 +3138,86 @@ AnnotationType CmdIdToAnnotationType(int cmdId) {
     // clang-format on
     return AnnotationType::Unknown;
 }
+
+#if IS_DEBUG
+// page 1 holds a comment (4), a reply to it (5), a reply to that reply (6)
+// and a /RT /Group member (7), which is not a reply. The replies sit inside
+// the comment's rect, so a hit-test that saw them would pick the smaller one.
+static TempStr ReplyTestPdfTemp() {
+    const char* objs[] = {
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [4 0 R 5 0 R 6 0 R 7 0 R] >>",
+        "<< /Type /Annot /Subtype /Text /Rect [100 600 120 620] /Contents (comment) /T (Ann) >>",
+        "<< /Type /Annot /Subtype /Text /Rect [105 605 115 615] /Contents (first) /IRT 4 0 R >>",
+        "<< /Type /Annot /Subtype /Text /Rect [105 605 115 615] /Contents (nested) /IRT 5 0 R >>",
+        "<< /Type /Annot /Subtype /Text /Rect [300 600 320 620] /Contents (group) /IRT 4 0 R /RT /Group >>",
+    };
+    int nObjs = dimof(objs);
+    str::Builder b;
+    b.Append(StrL("%PDF-1.4\n"));
+    Vec<int> offs;
+    for (int i = 0; i < nObjs; i++) {
+        VecAppend(offs, len(b));
+        b.Append(fmt("%d 0 obj\n%s\nendobj\n", i + 1, Str(objs[i])));
+    }
+    int xref = len(b);
+    b.Append(fmt("xref\n0 %d\n0000000000 65535 f \n", nObjs + 1));
+    for (int off : offs) {
+        b.Append(fmt("%010d 00000 n \n", off));
+    }
+    b.Append(fmt("trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n", nObjs + 1, xref));
+    b.Append(StrL("%%EOF\n"));
+    return ToStrTemp(b);
+}
+
+static Annotation* FindByContents(const Vec<Annotation*>& annots, Str contents) {
+    for (Annotation* a : annots) {
+        if (str::Eq(Contents(a), contents)) {
+            return a;
+        }
+    }
+    return nullptr;
+}
+
+static bool RepliesAre(Annotation* annot, Str c1, Str c2, Str c3 = {}) {
+    Vec<Annotation*> replies;
+    GetAnnotationReplies(annot, replies);
+    int n = len(c3) > 0 ? 3 : 2;
+    if (len(replies) != n || !str::Eq(Contents(replies[0]), c1) || !str::Eq(Contents(replies[1]), c2)) {
+        return false;
+    }
+    return n == 2 || str::Eq(Contents(replies[2]), c3);
+}
+
+bool Annotation_UnitTestReplies() {
+    EngineBase* engine = CreateEngineMupdfFromData(ReplyTestPdfTemp(), StrL("replies.pdf"), nullptr);
+    if (!engine) {
+        return false;
+    }
+    Vec<Annotation*> annots;
+    EngineMupdfGetAnnotations(engine, annots);
+    Annotation* comment = FindByContents(annots, StrL("comment"));
+    Annotation* first = FindByContents(annots, StrL("first"));
+    Annotation* nested = FindByContents(annots, StrL("nested"));
+    Annotation* group = FindByContents(annots, StrL("group"));
+    bool ok = len(annots) == 4 && comment && first && nested && group;
+    ok = ok && !comment->isReply && first->isReply && nested->isReply && !group->isReply;
+    ok = ok && RepliesAre(comment, StrL("first"), StrL("nested"));
+
+    // replies are neither drawn nor hit
+    if (ok) {
+        fz_context* ctx = comment->engine->Ctx();
+        ok = pdf_annot_hidden_for_editing(ctx, first->pdfannot) && !pdf_annot_hidden_for_editing(ctx, group->pdfannot);
+    }
+    ok = ok && EngineMupdfGetAnnotationAtPos(engine, 1, PointF{110, 182}, 0, nullptr) == comment;
+
+    ok = ok && CanReplyToAnnotation(comment) && !CanReplyToAnnotation(first);
+    Annotation* added = ok ? AddAnnotationReply(comment, StrL("added")) : nullptr;
+    ok = ok && added && added->isReply && str::Eq(Contents(added), StrL("added"));
+    ok = ok && RepliesAre(comment, StrL("first"), StrL("nested"), StrL("added"));
+    ok = ok && !AddAnnotationReply(comment, StrL("  "));
+    SafeEngineRelease(&engine);
+    return ok;
+}
+#endif
