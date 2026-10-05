@@ -17,6 +17,7 @@
 #include "gui/VirtCtrl.h"
 
 #include "Settings.h"
+#include "AppSettings.h"
 #include "DisplayMode.h"
 #include "DocController.h"
 #include "EngineBase.h"
@@ -36,6 +37,10 @@ constexpr int kThumbnailPadding = 16;
 // the sidebar can be as narrow as 150 px: one 120 px column must still fit
 constexpr int kThumbnailSidebarPadding = 8;
 constexpr int kThumbnailMaxCols = 6;
+// ThumbnailZoom, in percent; a Ctrl + wheel notch changes it a step
+constexpr int kThumbnailZoomMin = 50;
+constexpr int kThumbnailZoomMax = 300;
+constexpr int kThumbnailZoomStep = 25;
 constexpr int kThumbnailRenderScreens = 1;
 constexpr int kThumbnailKeepScreens = 2;
 constexpr Color kCurrentPageColor = MkRgb(0, 120, 215);
@@ -259,12 +264,21 @@ PageThumbnailsCtrl::~PageThumbnailsCtrl() {
     cache = nullptr;
 }
 
+static int ThumbnailZoom() {
+    return clampi(gSettings->thumbnailZoom, kThumbnailZoomMin, kThumbnailZoomMax);
+}
+
+void PageThumbnailsCtrl::UpdateSizes() {
+    int zoom = ThumbnailZoom();
+    thumbDx = DpiScaleByDpi(dpi, (kThumbnailDx * zoom) / 100);
+    thumbDy = DpiScaleByDpi(dpi, (kThumbnailDy * zoom) / 100);
+}
+
 // (Re)start from the tab's document: its pages, the current page and the dpi.
 // Rendered thumbnails are dropped; also called after the pages changed
 void PageThumbnailsCtrl::SetTab(WindowTab* newTab) {
     tab = newTab;
-    thumbDx = DpiScaleByDpi(dpi, kThumbnailDx);
-    thumbDy = DpiScaleByDpi(dpi, kThumbnailDy);
+    UpdateSizes();
     gap = DpiScaleByDpi(dpi, kThumbnailGap);
     rowGap = gap;
     itemDy = thumbDy + gap;
@@ -300,6 +314,44 @@ void PageThumbnailsCtrl::ResetCache() {
     VecAppendBlanks(cache->stale, pageCount);
 }
 
+// a new thumbnail size: the old thumbnails show, stretched, until re-rendered
+void PageThumbnailsCtrl::KeepThumbnailsAsStale() {
+    PageThumbnailsCache* old = cache;
+    EngineBase* engine = nullptr;
+    if (!old->workerRunning) {
+        engine = old->renderEngine;
+        old->renderEngine = nullptr;
+    }
+    Vec<Pixmap*> kept;
+    for (Pixmap*& thumbnail : old->thumbnails) {
+        VecAppend(kept, thumbnail);
+        thumbnail = nullptr;
+    }
+
+    ResetCache();
+    cache->renderEngine = engine;
+    int n = std::min(len(kept), len(cache->thumbnails));
+    for (int i = 0; i < n; i++) {
+        cache->thumbnails[i] = kept[i];
+        cache->stale[i] = kept[i] ? 1 : 0;
+    }
+    for (int i = n; i < len(kept); i++) {
+        FreeThumbnail(kept[i]);
+    }
+}
+
+void PageThumbnailsCtrl::SetZoom(int percent) {
+    percent = clampi(percent, kThumbnailZoomMin, kThumbnailZoomMax);
+    if (percent == ThumbnailZoom()) {
+        return;
+    }
+    gSettings->thumbnailZoom = percent;
+    UpdateSizes();
+    KeepThumbnailsAsStale();
+    SetBounds(bounds);
+    Invalidate();
+}
+
 // the document was re-rendered: so are the thumbnails, the old ones shown meanwhile
 void PageThumbnailsCtrl::Refresh() {
     for (int i = 0; i < len(cache->thumbnails); i++) {
@@ -322,7 +374,9 @@ void PageThumbnailsCtrl::SetBounds(Rect r) {
     int reservedScrollbarDx = DpiScaleByDpi(dpi, 10);
     int availableDx = r.dx - padding.left - padding.right - reservedScrollbarDx;
     int newCols = (availableDx + gap) / (thumbDx + gap);
-    newCols = clampi(newCols, 1, kThumbnailMaxCols);
+    // zoomed out, more than kThumbnailMaxCols fit in the same width
+    int maxCols = std::max(kThumbnailMaxCols, (kThumbnailMaxCols * 100) / ThumbnailZoom());
+    newCols = clampi(newCols, 1, maxCols);
     if (newCols != cols) {
         cols = newCols;
         rowsModel->rows = (pageCount + cols - 1) / cols;
@@ -384,6 +438,12 @@ void PageThumbnailsCtrl::DrawRow(DrawItemEvent* ev) {
         if (thumbnail) {
             int drawDx = std::min(thumbnail->width, thumbDx);
             int drawDy = std::min(thumbnail->height, thumbDy);
+            // one of another size, until re-rendered after a zoom
+            if (cache->stale[pageNo - 1]) {
+                float scale = std::min((float)thumbDx / thumbnail->width, (float)thumbDy / thumbnail->height);
+                drawDx = (int)(thumbnail->width * scale);
+                drawDy = (int)(thumbnail->height * scale);
+            }
             Rect target{x + ((thumbDx - drawDx) / 2), pageRect.y + ((thumbDy - drawDy) / 2), drawDx, drawDy};
             ev->gfx->DrawPixmap(thumbnail, target);
         }
@@ -521,9 +581,18 @@ void PageThumbnailsCtrl::OnThumbMouseMove(VirtMouseEvent* ev) {
 
 // Scrolls in proportion to the delta, 3 thumbnails a notch, so a touchpad's
 // small deltas scroll too. The wheel is ours even at the list's ends: unhandled,
-// it would scroll the document
+// it would scroll the document. Ctrl + wheel zooms them
 void PageThumbnailsCtrl::OnThumbMouseWheel(VirtMouseEvent* ev) {
     ev->didHandle = true;
+    if (ev->isCtrl) {
+        zoomWheelDelta += ev->wheelDelta;
+        int steps = zoomWheelDelta / WHEEL_DELTA;
+        zoomWheelDelta -= steps * WHEEL_DELTA;
+        if (steps != 0) {
+            SetZoom(ThumbnailZoom() + (steps * kThumbnailZoomStep));
+        }
+        return;
+    }
     int dy = -(ev->wheelDelta * 3 * GetItemHeight()) / WHEEL_DELTA;
     if (ScrollBy(dy)) {
         StartRendering();

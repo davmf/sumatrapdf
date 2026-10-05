@@ -1593,6 +1593,12 @@ const globalPrefs: Field[] = [
     "width of the favorites / bookmarks sidebar in screen pixels, as last resized (0 means the default)",
   ).internal(),
   field(
+    "ThumbnailZoom",
+    Int,
+    100,
+    "size of page thumbnails in percent, as last set with Ctrl + mouse wheel",
+  ).internal(),
+  field(
     "Scrollbars",
     Str,
     "windows",
