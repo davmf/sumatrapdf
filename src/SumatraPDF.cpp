@@ -90,6 +90,7 @@
 #include "SelectionToolbar.h"
 #include "AnnotEditToolbar.h"
 #include "AnnotFilterToolbar.h"
+#include "CommentCards.h"
 #include "CommentsPanel.h"
 #include "ScreenshotCapture.h"
 #include "Screenshot.h"
@@ -16427,6 +16428,10 @@ static bool MaybeTranslateAccelerator(MSG& msg) {
 
     // Up / Down in the focused thumbnails panel go through its pages
     if (msg.message == WM_KEYDOWN && ThumbnailsTakeKey(FindMainWindowByHwnd(msg.hwnd), msg.hwnd, msg.wParam)) {
+        return false;
+    }
+    // and in the focused comment cards, through the comments
+    if (msg.message == WM_KEYDOWN && CommentCardsTakeKey(msg.hwnd, msg.wParam)) {
         return false;
     }
 

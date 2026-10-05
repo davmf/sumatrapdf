@@ -74,7 +74,7 @@ static ILayout* ViewLayout(MainWindow* win, SidebarView v) {
     }
 }
 
-static int ViewControls(MainWindow* win, SidebarView v, ControlBase* out[3]) {
+static int ViewControls(MainWindow* win, SidebarView v, ControlBase* out[kMaxViewControls]) {
     switch (v) {
         case SidebarView::Bookmarks:
             out[0] = win->tocFilterEdit;
@@ -484,7 +484,7 @@ static void HostView(SidebarPanel* p, ILayout* view) {
 
 // shows a view's native controls in host, or hides them
 static void PlaceViewControls(MainWindow* win, SidebarView v, SidebarPanel* host) {
-    ControlBase* ctrls[3];
+    ControlBase* ctrls[kMaxViewControls];
     int n = ViewControls(win, v, ctrls);
     for (int i = 0; i < n; i++) {
         HWND hwnd = ctrls[i]->hwnd;

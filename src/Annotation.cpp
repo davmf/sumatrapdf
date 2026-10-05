@@ -2268,7 +2268,8 @@ static void SetDefaultAuthor(fz_context* ctx, pdf_annot* annot) {
     if (!pdf_annot_has_author(ctx, annot)) {
         return;
     }
-    Str defAuthor = gSettings->annotations.defaultAuthor;
+    // no settings in unit tests
+    Str defAuthor = gSettings ? gSettings->annotations.defaultAuthor : Str{};
     if (str::Eq(defAuthor, StrL("(none)"))) {
         return;
     }
@@ -2677,12 +2678,22 @@ void GetAnnotationReplies(Annotation* annot, Vec<Annotation*>& out) {
     }
 }
 
-// A /Text annotation with /IRT, the way Acrobat writes replies: same /Rect as
-// the parent, no popup of its own.
-Annotation* AddAnnotationReply(Annotation* parent, Str text) {
-    if (!CanReplyToAnnotation(parent) || str::IsEmptyOrWhiteSpace(text)) {
-        return nullptr;
+// the replies a reader wrote, not the /State ones
+void GetCommentReplies(Annotation* annot, Vec<Annotation*>& out) {
+    Vec<Annotation*> replies;
+    GetAnnotationReplies(annot, replies);
+    for (Annotation* r : replies) {
+        if (!r->isState) {
+            VecAppend(out, r);
+        }
     }
+}
+
+SeqStrings gReviewStateNames = "None\0Accepted\0Rejected\0Cancelled\0Completed\0";
+
+// A /Text annotation with /IRT, the way Acrobat writes replies: same /Rect as
+// the parent, no popup of its own. A non-empty state makes it a /State reply.
+static Annotation* AddReply(Annotation* parent, Str text, Str state) {
     EngineMupdf* e = parent->engine;
     auto* ctx = e->Ctx();
     AutoEndEngineOperation op(e, "Reply to annotation");
@@ -2698,13 +2709,25 @@ Annotation* AddAnnotationReply(Annotation* parent, Str text) {
             page = pdf_annot_page(ctx, pa);
             annot = pdf_create_annot_raw(ctx, page, PDF_ANNOT_TEXT);
             pdf_set_annot_flags(ctx, annot, PDF_ANNOT_IS_PRINT | PDF_ANNOT_IS_NO_ZOOM | PDF_ANNOT_IS_NO_ROTATE);
-            pdf_set_annot_rect(ctx, annot, pdf_annot_rect(ctx, pa));
+            // pdf_annot_rect() throws for markup like Highlight
+            pdf_set_annot_rect(ctx, annot, pdf_dict_get_rect(ctx, pdf_annot_obj(ctx, pa), PDF_NAME(Rect)));
             pdf_dict_put(ctx, pdf_annot_obj(ctx, annot), PDF_NAME(IRT), pdf_annot_obj(ctx, pa));
-            pdf_set_annot_contents(ctx, annot, CStrTemp(text));
+            if (len(text) > 0) {
+                pdf_set_annot_contents(ctx, annot, CStrTemp(text));
+            }
             time_t now = time(nullptr);
             pdf_set_annot_creation_date(ctx, annot, now);
             pdf_set_annot_modification_date(ctx, annot, now);
             SetDefaultAuthor(ctx, annot);
+            if (len(state) > 0) {
+                pdf_obj* obj = pdf_annot_obj(ctx, annot);
+                pdf_dict_puts_drop(ctx, obj, "StateModel", pdf_new_name(ctx, "Review"));
+                pdf_dict_puts_drop(ctx, obj, "State", pdf_new_name(ctx, CStrTemp(state)));
+                // what Acrobat writes, shown by viewers that don't know states
+                Str author(pdf_annot_author(ctx, annot));
+                TempStr s = len(author) > 0 ? fmt("%s set by %s", state, author) : str::DupTemp(state);
+                pdf_set_annot_contents(ctx, annot, CStrTemp(s));
+            }
             pdf_update_annot(ctx, annot);
         }
         fz_catch(ctx) {
@@ -2729,6 +2752,71 @@ Annotation* AddAnnotationReply(Annotation* parent, Str text) {
     }
     MarkNotificationAsModified(e, res, AnnotationChange::Add);
     return res;
+}
+
+Annotation* AddAnnotationReply(Annotation* parent, Str text) {
+    if (!CanReplyToAnnotation(parent) || str::IsEmptyOrWhiteSpace(text)) {
+        return nullptr;
+    }
+    return AddReply(parent, text, {});
+}
+
+// index in gReviewStateNames of a /StateModel /Review reply, -1 for anything
+// else (e.g. a /Marked checkmark)
+static int ReviewStateIdx(Annotation* a) {
+    if (!AnnotationIsLive(a) || !a->isState) {
+        return -1;
+    }
+    EngineMupdf* e = a->engine;
+    auto* ctx = e->Ctx();
+    AutoUnlockRecursiveMutex cs(&e->docLock);
+    int idx = -1;
+    fz_try(ctx) {
+        pdf_obj* obj = pdf_annot_obj(ctx, a->pdfannot);
+        // no /StateModel means Review (PDF 1.7, 12.5.6.3)
+        pdf_obj* model = pdf_dict_gets(ctx, obj, "StateModel");
+        if (!model || str::Eq(Str(pdf_to_name(ctx, model)), StrL("Review"))) {
+            idx = SeqStrIndex(gReviewStateNames, Str(pdf_to_name(ctx, pdf_dict_gets(ctx, obj, "State"))));
+        }
+    }
+    fz_catch(ctx) {
+        fz_report_error(ctx);
+    }
+    return idx;
+}
+
+ReviewState ReviewStateOf(Annotation* stateReply) {
+    int idx = ReviewStateIdx(stateReply);
+    return idx < 0 ? ReviewState::None : (ReviewState)idx;
+}
+
+// The newest review state reply of a thread, nullptr if it has none. Acrobat
+// keeps one per author; the newest is where the thread is now.
+Annotation* ReviewStateReply(Annotation* annot) {
+    Vec<Annotation*> replies;
+    GetAnnotationReplies(annot, replies);
+    Annotation* res = nullptr;
+    time_t resDate = 0;
+    for (Annotation* r : replies) {
+        if (ReviewStateIdx(r) < 0) {
+            continue;
+        }
+        // a tie goes to the later one: it was written after
+        time_t d = ModificationDate(r);
+        if (!res || d >= resDate) {
+            res = r;
+            resDate = d;
+        }
+    }
+    return res;
+}
+
+// a reply "Completed set by dxf" with /State /Completed, like Acrobat's
+Annotation* SetReviewState(Annotation* annot, ReviewState state) {
+    if (!CanReplyToAnnotation(annot)) {
+        return nullptr;
+    }
+    return AddReply(annot, {}, SeqStrByIndex(gReviewStateNames, (int)state));
 }
 
 struct AnnotationClipboard {
@@ -3143,17 +3231,7 @@ AnnotationType CmdIdToAnnotationType(int cmdId) {
 // page 1 holds a comment (4), a reply to it (5), a reply to that reply (6)
 // and a /RT /Group member (7), which is not a reply. The replies sit inside
 // the comment's rect, so a hit-test that saw them would pick the smaller one.
-static TempStr ReplyTestPdfTemp() {
-    const char* objs[] = {
-        "<< /Type /Catalog /Pages 2 0 R >>",
-        "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [4 0 R 5 0 R 6 0 R 7 0 R] >>",
-        "<< /Type /Annot /Subtype /Text /Rect [100 600 120 620] /Contents (comment) /T (Ann) >>",
-        "<< /Type /Annot /Subtype /Text /Rect [105 605 115 615] /Contents (first) /IRT 4 0 R >>",
-        "<< /Type /Annot /Subtype /Text /Rect [105 605 115 615] /Contents (nested) /IRT 5 0 R >>",
-        "<< /Type /Annot /Subtype /Text /Rect [300 600 320 620] /Contents (group) /IRT 4 0 R /RT /Group >>",
-    };
-    int nObjs = dimof(objs);
+static TempStr TestPdfTemp(const char** objs, int nObjs) {
     str::Builder b;
     b.Append(StrL("%PDF-1.4\n"));
     Vec<int> offs;
@@ -3169,6 +3247,38 @@ static TempStr ReplyTestPdfTemp() {
     b.Append(fmt("trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n", nObjs + 1, xref));
     b.Append(StrL("%%EOF\n"));
     return ToStrTemp(b);
+}
+
+static TempStr ReplyTestPdfTemp() {
+    const char* objs[] = {
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [4 0 R 5 0 R 6 0 R 7 0 R] >>",
+        "<< /Type /Annot /Subtype /Text /Rect [100 600 120 620] /Contents (comment) /T (Ann) >>",
+        "<< /Type /Annot /Subtype /Text /Rect [105 605 115 615] /Contents (first) /IRT 4 0 R >>",
+        "<< /Type /Annot /Subtype /Text /Rect [105 605 115 615] /Contents (nested) /IRT 5 0 R >>",
+        "<< /Type /Annot /Subtype /Text /Rect [300 600 320 620] /Contents (group) /IRT 4 0 R /RT /Group >>",
+    };
+    return TestPdfTemp(objs, dimof(objs));
+}
+
+// comment 4 has a reply (5), an older Accepted (6), a newer Completed (7) and
+// a /Marked checkmark (8), which is not a review state
+static TempStr StateTestPdfTemp() {
+    const char* objs[] = {
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R] >>",
+        "<< /Type /Annot /Subtype /Text /Rect [100 600 120 620] /Contents (comment) /T (Ann) >>",
+        "<< /Type /Annot /Subtype /Text /Rect [100 600 120 620] /Contents (reply) /IRT 4 0 R >>",
+        "<< /Type /Annot /Subtype /Text /Rect [100 600 120 620] /Contents (Accepted set by Bob) /IRT 4 0 R "
+        "/T (Bob) /StateModel /Review /State /Accepted /M (D:20260101000000Z) >>",
+        "<< /Type /Annot /Subtype /Text /Rect [100 600 120 620] /Contents (Completed set by Ann) /IRT 4 0 R "
+        "/T (Ann) /StateModel /Review /State /Completed /M (D:20260201000000Z) >>",
+        "<< /Type /Annot /Subtype /Text /Rect [100 600 120 620] /Contents (Marked set by Ann) /IRT 4 0 R "
+        "/T (Ann) /StateModel /Marked /State /Marked /M (D:20260301000000Z) >>",
+    };
+    return TestPdfTemp(objs, dimof(objs));
 }
 
 static Annotation* FindByContents(const Vec<Annotation*>& annots, Str contents) {
@@ -3217,6 +3327,37 @@ bool Annotation_UnitTestReplies() {
     ok = ok && added && added->isReply && str::Eq(Contents(added), StrL("added"));
     ok = ok && RepliesAre(comment, StrL("first"), StrL("nested"), StrL("added"));
     ok = ok && !AddAnnotationReply(comment, StrL("  "));
+    SafeEngineRelease(&engine);
+    return ok;
+}
+
+bool Annotation_UnitTestReviewState() {
+    EngineBase* engine = CreateEngineMupdfFromData(StateTestPdfTemp(), StrL("states.pdf"), nullptr);
+    if (!engine) {
+        return false;
+    }
+    Vec<Annotation*> annots;
+    EngineMupdfGetAnnotations(engine, annots);
+    Annotation* comment = FindByContents(annots, StrL("comment"));
+    Annotation* reply = FindByContents(annots, StrL("reply"));
+    Annotation* marked = FindByContents(annots, StrL("Marked set by Ann"));
+    bool ok = comment && reply && marked && !reply->isState && marked->isState;
+
+    // state replies aren't comments
+    Vec<Annotation*> replies;
+    if (ok) {
+        GetCommentReplies(comment, replies);
+    }
+    ok = ok && len(replies) == 1 && replies[0] == reply;
+
+    // the newest review state wins; Marked is another model
+    Annotation* st = ok ? ReviewStateReply(comment) : nullptr;
+    ok = ok && st && ReviewStateOf(st) == ReviewState::Completed && str::Eq(Author(st), StrL("Ann"));
+    ok = ok && ReviewStateOf(marked) == ReviewState::None && ReviewStateOf(reply) == ReviewState::None;
+
+    Annotation* set = ok ? SetReviewState(comment, ReviewState::Rejected) : nullptr;
+    ok = ok && set && set->isState && ReviewStateOf(set) == ReviewState::Rejected;
+    ok = ok && ReviewStateReply(comment) == set && str::StartsWith(Contents(set), StrL("Rejected"));
     SafeEngineRelease(&engine);
     return ok;
 }

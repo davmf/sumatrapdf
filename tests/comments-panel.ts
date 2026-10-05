@@ -1,5 +1,5 @@
-// The Comments sidebar view: annotations grouped by page, replies under the
-// comment they answer, filtered by text and by author.
+// The Comments sidebar view: annotations grouped by page (or author, status,
+// ...), replies and review status in the card, filtered by text and by author.
 //
 // Run: bun tests/comments-panel.ts [--no-build]
 
@@ -10,13 +10,13 @@ import { runStandalone, tmpPath } from "./util";
 import { sleep } from "./winapi";
 import { killAndWait, launchControlled } from "./win-automation";
 
-// page 1: alice's note with bob's reply; page 2: bob's highlight and a link,
-// which the panel leaves out
+// page 1: alice's note with bob's reply and carol's Accepted status; page 2:
+// bob's highlight and a link, which the panel leaves out
 function makePdf(): string {
   const objs: string[] = [];
   objs[1] = "<< /Type /Catalog /Pages 2 0 R >>";
   objs[2] = "<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >>";
-  objs[3] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [4 0 R 5 0 R] >>";
+  objs[3] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [4 0 R 5 0 R 9 0 R] >>";
   objs[4] = "<< /Type /Annot /Subtype /Text /Rect [20 240 40 260] /T (alice) /Contents (first note) >>";
   objs[5] = "<< /Type /Annot /Subtype /Text /Rect [20 240 40 260] /T (bob) /Contents (agreed) /IRT 4 0 R >>";
   objs[6] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [7 0 R 8 0 R] >>";
@@ -24,6 +24,9 @@ function makePdf(): string {
     "<< /Type /Annot /Subtype /Highlight /Rect [20 200 120 220] /QuadPoints [20 220 120 220 20 200 120 200] " +
     "/T (bob) /Contents (check this) >>";
   objs[8] = "<< /Type /Annot /Subtype /Link /Rect [20 100 120 120] /A << /S /URI /URI (https://example.com) >> >>";
+  objs[9] =
+    "<< /Type /Annot /Subtype /Text /Rect [20 240 40 260] /T (carol) /Contents (Accepted set by carol) " +
+    "/IRT 4 0 R /StateModel /Review /State /Accepted >>";
 
   let pdf = "%PDF-1.7\n";
   const offsets: number[] = [];
@@ -74,7 +77,7 @@ async function waitForRows(client: ControlClient, what: string, n: number): Prom
 
 const allRows = [
   "Page 1 (1)",
-  "  Text (alice): first note",
+  "  Text (alice): first note [Accepted (carol)]",
   "    bob: agreed",
   "Page 2 (1)",
   "  Highlight (bob): check this",
@@ -116,11 +119,54 @@ export async function testit(): Promise<void> {
       throw new Error(`comments-panel: choosing the reply didn't select its comment: ${state}`);
     }
 
+    expectRows("by author", await panel(client, "group", "author"), [
+      "alice (1)",
+      "  Text (alice): first note [Accepted (carol)]",
+      "    bob: agreed",
+      "bob (1)",
+      "  Highlight (bob): check this",
+    ]);
+    expectRows("by status", await panel(client, "group", "status"), [
+      "No status (1)",
+      "  Highlight (bob): check this",
+      "Accepted (1)",
+      "  Text (alice): first note [Accepted (carol)]",
+      "    bob: agreed",
+    ]);
+    expectRows("by page", await panel(client, "group", "page"), allRows);
+
+    // a collapsed group stays collapsed across rebuilds
+    await panel(client, "toggle", "0");
+    expectRows("collapsed", await panel(client, "rebuild"), ["Page 1 (1) collapsed", ...allRows.slice(3)]);
+    expectRows("expanded", await panel(client, "toggle", "0"), allRows);
+
+    // a status is a hidden reply: the newest one shows, none is listed
+    await panel(client, "status", "4 Completed");
+    state = await waitForRows(client, "after status", allRows.length);
+    if (!/row {3}Highlight \(bob\): check this \[Completed( \(.+\))?\]/.test(state)) {
+      throw new Error(`comments-panel: status not shown: ${state}`);
+    }
+    await panel(client, "status", "1 Rejected");
+    state = await waitForRows(client, "after second status", allRows.length);
+    if (!/row {3}Text \(alice\): first note \[Rejected( \(.+\))?\]/.test(state)) {
+      throw new Error(`comments-panel: newer status didn't win: ${state}`);
+    }
+
+    // a reply typed in the card
+    await panel(client, "reply", "4 noted");
+    state = await waitForRows(client, "after reply", allRows.length + 1);
+    if (!/row {5}.*noted/.test(state)) {
+      throw new Error(`comments-panel: reply not added: ${state}`);
+    }
+
     // deleting a comment takes its reply along
     await panel(client, "delete", "1");
-    state = await waitForRows(client, "after delete", 2);
-    expectRows("after delete", state, allRows.slice(3));
-    if (!/authors=1/.test(state)) {
+    state = await waitForRows(client, "after delete", 3);
+    if (rows(state)[0] !== "Page 2 (1)" || /alice|carol/.test(state)) {
+      throw new Error(`comments-panel: after delete: ${state}`);
+    }
+    // bob and whoever wrote the reply; alice went with her comment
+    if (!/authors=2/.test(state)) {
       throw new Error(`comments-panel: the author list kept a deleted author: ${state}`);
     }
   } finally {

@@ -10754,6 +10754,7 @@ Annotation* MakeAnnotationWrapper(EngineMupdf* engine, pdf_annot* annot, int pag
     AnnotationType typ = AnnotationType::Unknown;
     RectF bounds;
     bool isReply = false;
+    bool isState = false;
 
     fz_context* ctx = engine->Ctx();
     fz_try(ctx) {
@@ -10761,6 +10762,7 @@ Annotation* MakeAnnotationWrapper(EngineMupdf* engine, pdf_annot* annot, int pag
         bounds = PdfAnnotBounds(ctx, annot);
         typ = AnnotationTypeFromPdfAnnot(tp);
         isReply = PdfAnnotIsReply(ctx, annot);
+        isState = isReply && pdf_dict_gets(ctx, pdf_annot_obj(ctx, annot), "State");
         if (isReply) {
             // not saved: only keeps mupdf from drawing it
             pdf_set_annot_hidden_for_editing(ctx, annot, 1);
@@ -10783,6 +10785,7 @@ Annotation* MakeAnnotationWrapper(EngineMupdf* engine, pdf_annot* annot, int pag
     res->bounds = bounds;
     res->type = typ;
     res->isReply = isReply;
+    res->isState = isState;
     return res;
 }
 

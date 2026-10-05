@@ -85,6 +85,8 @@ struct Annotation {
     pdf_annot* pdfannot = nullptr; // not owned
     // /IRT reply to another annotation on the page; not drawn or hit-tested
     bool isReply = false;
+    // a reply that sets its thread's /State (e.g. Completed), not a comment
+    bool isState = false;
 
     Annotation() = default;
     ~Annotation() {
@@ -217,7 +219,22 @@ bool AnnotationIsLive(Annotation*);
 
 bool CanReplyToAnnotation(Annotation*);
 void GetAnnotationReplies(Annotation*, Vec<Annotation*>& out);
+void GetCommentReplies(Annotation*, Vec<Annotation*>& out);
 Annotation* AddAnnotationReply(Annotation*, Str text);
+
+// /StateModel /Review states, as Acrobat writes them; order matches gReviewStateNames
+enum class ReviewState {
+    None,
+    Accepted,
+    Rejected,
+    Cancelled,
+    Completed,
+};
+extern SeqStrings gReviewStateNames;
+
+ReviewState ReviewStateOf(Annotation* stateReply);
+Annotation* ReviewStateReply(Annotation*);
+Annotation* SetReviewState(Annotation*, ReviewState);
 
 void DeleteAnnotation(Annotation*);
 bool AnnotationCanBeMoved(AnnotationType);

@@ -100,7 +100,7 @@ bool AnnotationHasText(Annotation* annot) {
         return true;
     }
     Vec<Annotation*> replies;
-    GetAnnotationReplies(annot, replies);
+    GetCommentReplies(annot, replies);
     return len(replies) > 0;
 }
 
@@ -481,7 +481,7 @@ static void BuildPopup(AnnotTextPopup* popup, Annotation* annot, bool canReply) 
     int margin = DpiScale(kMargin);
     Vec<Annotation*> thread;
     VecAppend(thread, annot);
-    GetAnnotationReplies(annot, thread);
+    GetCommentReplies(annot, thread);
 
     // CRLF is what a win32 edit expects; annotation text uses bare LF.
     // The card is as wide as the longest line or header of any of them.

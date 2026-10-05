@@ -277,6 +277,7 @@ const sumatraFiles: FileGroup[] = [
       "AnnotTextPopup.*",
       "AnnotEditToolbar.*",
       "AnnotFilterToolbar.*",
+      "CommentCards.*",
       "CommentsPanel.*",
       "AnnotSearch.*",
       "CanvasAboutUI.*",
