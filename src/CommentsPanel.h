@@ -8,7 +8,9 @@ struct CommentsPanel;
 void CreateCommentsPanel(MainWindow*);
 void DeleteCommentsPanel(MainWindow*);
 ILayout* CommentsViewLayout(MainWindow*);
-int CommentsViewControls(MainWindow*, ControlBase* out[3]);
+constexpr int kMaxViewControls = 4;
+
+int CommentsViewControls(MainWindow*, ControlBase* out[kMaxViewControls]);
 HWND CommentsFocusHwnd(MainWindow*);
 bool CanShowComments(WindowTab*);
 void UpdateCommentsPanel(MainWindow*);

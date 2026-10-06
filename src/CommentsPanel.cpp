@@ -29,63 +29,43 @@
 #include "Translations.h"
 #include "Menu.h"
 #include "Theme.h"
+#include "Toolbar.h"
 #include "AnnotSearch.h"
 #include "AnnotEditToolbar.h"
 #include "AnnotTextPopup.h"
 #include "SidebarPanel.h"
+#include "CommentCards.h"
 
 #include "CommentsPanel.h"
 
 /*
-The Comments sidebar view: the document's annotations grouped by page, with
-replies under the comment they answer.
+The Comments sidebar view: the document's annotations as cards, grouped by
+page (or author, date, ...), with replies and review status in the card.
 
   [search comments     ] [All authors v]
-  - Page 3 (1)
-    - Highlight (alice): check this value
-        bob: agreed
+  [By page                            v]
+  [ Page 3                         1 v ]
+  | alice  Highlight                   |
+  | check this value                   |
+  |  | bob: agreed                     |
+  | v Completed (bob)       2026-09-12 |
 */
 
-constexpr int kMaxLabelLen = 80;
 constexpr int kAuthorListDx = 120;
+// ids of the Set Status submenu items; only seen by our TrackPopupMenu
+constexpr int kCmdSetStatusFirst = CmdFirstCustom + 9000;
 
-// a row of the tree: a page, a comment, or a reply
-struct CommentNode {
-    CommentNode* parent = nullptr;
-    Vec<CommentNode*> kids;
-    Str text;
-    Str tip;
-    // nullptr for a page (and the root)
-    Annotation* annot = nullptr;
-    int pageNo = 0;
-    bool expanded = true;
-    uintptr_t userData = 0;
-
-    ~CommentNode() {
-        str::Free(text);
-        str::Free(tip);
-        DeleteVecMembers(kids);
-    }
+enum class CommentsGroupBy {
+    Page,
+    Author,
+    Date,
+    Type,
+    Status,
+    Color,
 };
 
-static CommentNode* Node(TreeItem ti) {
-    return (CommentNode*)ti;
-}
-
-struct CommentsTree : TreeModel {
-    CommentNode* root = new CommentNode();
-
-    ~CommentsTree() override { delete root; }
-    TreeItem Root() override { return (TreeItem)root; }
-    Str Text(TreeItem ti) override { return Node(ti)->text; }
-    TreeItem Parent(TreeItem ti) override { return (TreeItem)Node(ti)->parent; }
-    int ChildCount(TreeItem ti) override { return len(Node(ti)->kids); }
-    TreeItem ChildAt(TreeItem ti, int idx) override { return (TreeItem)Node(ti)->kids[idx]; }
-    bool IsExpanded(TreeItem ti) override { return Node(ti)->expanded; }
-    bool IsChecked(TreeItem) override { return false; }
-    void SetUserData(TreeItem ti, uintptr_t data) override { Node(ti)->userData = data; }
-    uintptr_t GetUserData(TreeItem ti) override { return Node(ti)->userData; }
-};
+// untranslated, for tests; same order as CommentsGroupBy
+static SeqStrings gGroupByNames = "page\0author\0date\0type\0status\0color\0";
 
 struct CommentsPanel {
     MainWindow* win = nullptr;
@@ -93,14 +73,14 @@ struct CommentsPanel {
     VBox* layout = nullptr;
     Edit* filterEdit = nullptr;
     DropDown* authorList = nullptr;
-    TreeView* tree = nullptr;
-    CommentsTree* model = nullptr;
+    DropDown* groupList = nullptr;
+    CommentCards* cards = nullptr;
     // the author list's entries after "All authors"
     StrVec authors;
     AnnotMatchOpts filter;
-    // what the user collapsed, kept across rebuilds; only compared, never read
-    Vec<int> collapsedPages;
-    Vec<Annotation*> collapsedThreads;
+    CommentsGroupBy groupBy = CommentsGroupBy::Page;
+    // "<groupBy>:<title>" of what the user collapsed, kept across rebuilds
+    StrVec collapsedGroups;
     bool loaded = false;
     bool rebuildPosted = false;
 };
@@ -130,22 +110,14 @@ static bool IsListedAnnot(Annotation* a) {
     }
 }
 
-// first line of the contents, short enough for a row
+// first line of the contents, for test dumps
 static TempStr ContentsLineTemp(Annotation* a) {
     Str s = Contents(a);
     int n = 0;
     while (n < len(s) && s.s[n] != '\n' && s.s[n] != '\r') {
         n++;
     }
-    if (n <= kMaxLabelLen) {
-        return str::DupTemp(Str(s.s, n));
-    }
-    n = kMaxLabelLen;
-    // don't cut a UTF-8 sequence in half
-    while (n > 0 && ((u8)s.s[n] & 0xC0) == 0x80) {
-        n--;
-    }
-    return str::JoinTemp(Str(s.s, n), StrL("..."));
+    return str::DupTemp(Str(s.s, n));
 }
 
 // "Highlight (alice): check this"; a reply: "bob: agreed"
@@ -163,38 +135,79 @@ static TempStr CommentLabelTemp(Annotation* a) {
     return len(line) == 0 ? head : fmt("%s: %s", head, line);
 }
 
-// local time, like the comment card
-static TempStr DateTemp(Annotation* a) {
+static TempStr TimeTemp(Annotation* a, const char* format) {
     time_t secs = ModificationDate(a);
     struct tm tm;
     if (secs == 0 || localtime_s(&tm, &secs) != 0) {
         return {};
     }
     char buf[64];
-    size_t n = strftime(buf, sizeof buf, "%Y-%m-%d %H:%M", &tm);
+    size_t n = strftime(buf, sizeof buf, format, &tm);
     return str::DupTemp(Str(buf, (int)n));
 }
 
-// "alice, 2026-09-12 10:30" over the whole contents
-static TempStr CommentTipTemp(Annotation* a) {
-    str::Builder sb;
-    TempStr author = str::DupTemp(Author(a));
-    TempStr date = DateTemp(a);
-    sb.Append(author);
-    if (len(date) > 0) {
-        if (len(sb) > 0) {
-            sb.Append(StrL(", "));
-        }
-        sb.Append(date);
+// local time, like the comment card
+static TempStr DateTemp(Annotation* a) {
+    return TimeTemp(a, "%Y-%m-%d %H:%M");
+}
+
+static Str ReviewStateLabel(ReviewState st) {
+    switch (st) {
+        case ReviewState::Accepted:
+            return Tr("Accepted");
+        case ReviewState::Rejected:
+            return Tr("Rejected");
+        case ReviewState::Cancelled:
+            return Tr("Cancelled");
+        case ReviewState::Completed:
+            return Tr("Completed");
+        default:
+            return Tr("None");
     }
-    Str contents = Contents(a);
-    if (len(contents) > 0) {
-        if (len(sb) > 0) {
-            sb.AppendChar('\n');
-        }
-        sb.Append(contents);
+}
+
+// where the thread is, None when nobody set a state
+static ReviewState ThreadState(Annotation* a, Annotation** byOut = nullptr) {
+    Annotation* sr = ReviewStateReply(a);
+    if (byOut) {
+        *byOut = sr;
     }
-    return ToStrTemp(sb);
+    return sr ? ReviewStateOf(sr) : ReviewState::None;
+}
+
+static CommentCardStatus CardStatus(ReviewState st) {
+    switch (st) {
+        case ReviewState::Accepted:
+        case ReviewState::Completed:
+            return CommentCardStatus::Done;
+        case ReviewState::Rejected:
+        case ReviewState::Cancelled:
+            return CommentCardStatus::Declined;
+        default:
+            return CommentCardStatus::None;
+    }
+}
+
+// "Completed (bob)"; empty with no state
+static TempStr StatusTemp(Annotation* a) {
+    Annotation* by = nullptr;
+    ReviewState st = ThreadState(a, &by);
+    if (st == ReviewState::None) {
+        return {};
+    }
+    Str label = ReviewStateLabel(st);
+    Str author = Author(by);
+    return len(author) > 0 ? fmt("%s (%s)", label, author) : str::DupTemp(label);
+}
+
+static Color SwatchColor(Annotation* a) {
+    PdfColor c = GetColor(a);
+    if (c == kColorUnset) {
+        return kColorUnset;
+    }
+    u8 r, g, b, alpha;
+    UnpackPdfColor(c, r, g, b, alpha);
+    return alpha == 0 ? kColorUnset : MkRgb(r, g, b);
 }
 
 static Str SelectedAuthor(CommentsPanel* cp) {
@@ -229,6 +242,10 @@ static bool SameStrVec(const StrVec& a, const StrVec& b) {
 static void UpdateAuthorList(CommentsPanel* cp, const Vec<Annotation*>& annots) {
     StrVec authors;
     for (Annotation* a : annots) {
+        // who set a status isn't an author of comments
+        if (a->isState) {
+            continue;
+        }
         Str author = Author(a);
         if (len(author) > 0 && authors.FindI(author) < 0) {
             authors.Append(author);
@@ -251,110 +268,176 @@ static void UpdateAuthorList(CommentsPanel* cp, const Vec<Annotation*>& annots) 
     CbSetCurrentSelection(cp->authorList, idx + 1);
 }
 
-static bool TreeShowsModel(CommentsPanel* cp) {
-    return cp->model && cp->tree->treeModel == cp->model;
-}
+//--- grouping
 
-static void SaveExpansion(CommentsPanel* cp) {
-    if (!TreeShowsModel(cp)) {
-        return;
-    }
-    for (CommentNode* page : cp->model->root->kids) {
-        bool open = cp->tree->IsExpanded((TreeItem)page);
-        VecRemove(cp->collapsedPages, page->pageNo);
-        if (!open) {
-            VecAppend(cp->collapsedPages, page->pageNo);
+// the group a comment goes in, and where that group sorts
+struct GroupKey {
+    TempStr title;
+    // groups sort by this, then by title
+    i64 order = 0;
+};
+
+static GroupKey GroupKeyOf(CommentsPanel* cp, Annotation* a) {
+    GroupKey k;
+    switch (cp->groupBy) {
+        case CommentsGroupBy::Page:
+            k.title = fmt(Tr("Page %d").s, a->pageNo);
+            k.order = a->pageNo;
+            break;
+        case CommentsGroupBy::Author: {
+            Str author = Author(a);
+            k.title = len(author) > 0 ? str::DupTemp(author) : str::DupTemp(Tr("(no author)"));
+            // no author last
+            k.order = len(author) > 0 ? 0 : 1;
+            break;
         }
-        for (CommentNode* thread : page->kids) {
-            if (len(thread->kids) == 0) {
-                continue;
+        case CommentsGroupBy::Date:
+            k.title = TimeTemp(a, "%Y-%m-%d");
+            if (len(k.title) == 0) {
+                k.title = str::DupTemp(Tr("No date"));
             }
-            VecRemove(cp->collapsedThreads, thread->annot);
-            if (!cp->tree->IsExpanded((TreeItem)thread)) {
-                VecAppend(cp->collapsedThreads, thread->annot);
+            // newest first
+            k.order = -(i64)ModificationDate(a) / (24 * 3600);
+            break;
+        case CommentsGroupBy::Type:
+            k.title = str::DupTemp(AnnotationReadableNameTemp(a->type));
+            break;
+        case CommentsGroupBy::Status: {
+            ReviewState st = ThreadState(a);
+            k.title = str::DupTemp(st == ReviewState::None ? Tr("No status") : ReviewStateLabel(st));
+            k.order = (int)st;
+            break;
+        }
+        case CommentsGroupBy::Color: {
+            Color c = SwatchColor(a);
+            if (c == kColorUnset) {
+                k.title = str::DupTemp(Tr("No color"));
+                k.order = 1;
+            } else {
+                k.title = fmt("#%02x%02x%02x", (int)GetRValue(c), (int)GetGValue(c), (int)GetBValue(c));
             }
+            break;
         }
     }
+    return k;
 }
 
-static CommentNode* AddNode(CommentNode* parent, Annotation* a) {
-    auto* n = new CommentNode();
-    n->parent = parent;
-    n->annot = a;
-    n->pageNo = a->pageNo;
-    n->text = str::Dup(CommentLabelTemp(a));
-    n->tip = str::Dup(CommentTipTemp(a));
-    VecAppend(parent->kids, n);
-    return n;
+static TempStr CollapseKeyTemp(CommentsPanel* cp, Str title) {
+    return fmt("%d:%s", (int)cp->groupBy, title);
 }
 
-static CommentNode* PageNode(CommentsPanel* cp, CommentNode* root, int pageNo) {
-    for (int i = len(root->kids) - 1; i >= 0; i--) {
-        if (root->kids[i]->pageNo == pageNo) {
-            return root->kids[i];
+struct GroupEntry {
+    CommentCardGroup* group = nullptr;
+    i64 order = 0;
+};
+
+static bool GroupLess(const GroupEntry& a, const GroupEntry& b) {
+    if (a.order != b.order) {
+        return a.order < b.order;
+    }
+    return str::CmpI(a.group->title, b.group->title) < 0;
+}
+
+static CommentCardGroup* FindOrAddGroup(CommentsPanel* cp, Vec<GroupEntry>& groups, const GroupKey& k) {
+    for (GroupEntry& e : groups) {
+        if (str::Eq(e.group->title, k.title)) {
+            return e.group;
         }
     }
-    auto* n = new CommentNode();
-    n->parent = root;
-    n->pageNo = pageNo;
-    n->expanded = !VecContains(cp->collapsedPages, pageNo);
-    VecAppend(root->kids, n);
-    return n;
+    auto* g = new CommentCardGroup();
+    g->title = str::Dup(k.title);
+    g->collapsed = cp->collapsedGroups.Find(CollapseKeyTemp(cp, k.title)) >= 0;
+    VecAppend(groups, GroupEntry{g, k.order});
+    return g;
 }
 
-// the annotations come in page order already; this keeps it if they don't
-static void SortPages(CommentNode* root) {
-    Vec<CommentNode*>& v = root->kids;
+static TempStr CardTextTemp(Annotation* a) {
+    TempStr s = str::DupTemp(Contents(a));
+    str::NormalizeNewlinesToLFInPlace(s);
+    return s;
+}
+
+static CommentCard* MakeCard(CommentsPanel* cp, Annotation* a, const Vec<Annotation*>& replies) {
+    auto* c = new CommentCard();
+    c->data = a;
+    c->author = str::Dup(Author(a));
+    Str type = AnnotationReadableNameTemp(a->type);
+    if (cp->groupBy == CommentsGroupBy::Page) {
+        c->kind = str::Dup(type);
+    } else {
+        c->kind = str::Dup(fmt(Tr("%s, page %d").s, type, a->pageNo));
+    }
+    c->date = str::Dup(DateTemp(a));
+    c->text = str::Dup(CardTextTemp(a));
+    c->status = str::Dup(StatusTemp(a));
+    c->statusKind = CardStatus(ThreadState(a));
+    c->swatch = SwatchColor(a);
+    c->canReply = CanAccessDisk() && CanReplyToAnnotation(a);
+    for (Annotation* r : replies) {
+        auto* cr = new CommentCardReply();
+        cr->author = str::Dup(Author(r));
+        cr->date = str::Dup(DateTemp(r));
+        cr->text = str::Dup(CardTextTemp(r));
+        VecAppend(c->replies, cr);
+    }
+    return c;
+}
+
+// newest first within a date group; otherwise in document order
+static void SortCardsByDate(CommentCardGroup* g) {
+    Vec<CommentCard*>& v = g->cards;
     for (int i = 1; i < len(v); i++) {
-        CommentNode* n = v[i];
+        CommentCard* n = v[i];
+        time_t t = ModificationDate((Annotation*)n->data);
         int j = i - 1;
-        for (; j >= 0 && v[j]->pageNo > n->pageNo; j--) {
+        for (; j >= 0 && ModificationDate((Annotation*)v[j]->data) < t; j--) {
             v[j + 1] = v[j];
         }
         v[j + 1] = n;
     }
 }
 
-static CommentNode* FindNode(CommentNode* n, Annotation* a) {
-    if (n->annot == a) {
-        return n;
+static void SortGroups(Vec<GroupEntry>& v) {
+    for (int i = 1; i < len(v); i++) {
+        GroupEntry n = v[i];
+        int j = i - 1;
+        for (; j >= 0 && GroupLess(n, v[j]); j--) {
+            v[j + 1] = v[j];
+        }
+        v[j + 1] = n;
     }
-    for (CommentNode* kid : n->kids) {
-        if (CommentNode* res = FindNode(kid, a)) {
-            return res;
+}
+
+static CommentCard* FindCard(CommentsPanel* cp, Annotation* a) {
+    for (CommentCardGroup* g : cp->cards->groups) {
+        for (CommentCard* c : g->cards) {
+            if (c->data == a) {
+                return c;
+            }
         }
     }
     return nullptr;
 }
 
-// a reply's thread is its top-level comment
-static CommentNode* ThreadNode(CommentNode* n) {
-    while (n && n->parent && n->parent->annot) {
-        n = n->parent;
-    }
-    return n;
-}
-
 static void SyncSelection(CommentsPanel* cp) {
     WindowTab* tab = cp->win->CurrentTab();
     Annotation* sel = tab ? tab->selectedAnnotation : nullptr;
-    if (!sel || !TreeShowsModel(cp)) {
+    if (!sel) {
         return;
     }
-    CommentNode* cur = Node(cp->tree->GetSelection());
-    if (cur && ThreadNode(cur)->annot == sel) {
+    CommentCard* cur = cp->cards->selected;
+    if (cur && cur->data == sel) {
         return;
     }
-    if (CommentNode* n = FindNode(cp->model->root, sel)) {
-        cp->tree->SelectItem((TreeItem)n);
+    if (CommentCard* c = FindCard(cp, sel)) {
+        cp->cards->Select(c, true);
     }
 }
 
-// threads where the comment or a reply matches the filter, by page
-static void BuildTree(CommentsPanel* cp) {
+// threads where the comment or a reply matches the filter, in groups
+static void BuildCards(CommentsPanel* cp) {
     WindowTab* tab = cp->win->CurrentTab();
     EngineBase* engine = CanShowComments(tab) ? TabEngine(tab) : nullptr;
-    SaveExpansion(cp);
     Vec<Annotation*> annots;
     if (engine) {
         EngineMupdfGetLoadedAnnotations(engine, annots);
@@ -362,7 +445,12 @@ static void BuildTree(CommentsPanel* cp) {
     UpdateAuthorList(cp, annots);
     Str author = SelectedAuthor(cp);
 
-    auto* model = new CommentsTree();
+    // keep the selected card selected, and the view where it was
+    CommentCard* prevSel = cp->cards->selected;
+    Annotation* keepSel = prevSel ? (Annotation*)prevSel->data : nullptr;
+    int keepScrollY = cp->cards->scrollY;
+
+    Vec<GroupEntry> groups;
     int nComments = 0;
     for (Annotation* a : annots) {
         if (!IsListedAnnot(a)) {
@@ -370,7 +458,7 @@ static void BuildTree(CommentsPanel* cp) {
         }
         nComments++;
         Vec<Annotation*> replies;
-        GetAnnotationReplies(a, replies);
+        GetCommentReplies(a, replies);
         bool show = CommentMatches(cp, a, author);
         for (int i = 0; !show && i < len(replies); i++) {
             show = CommentMatches(cp, replies[i], author);
@@ -378,22 +466,23 @@ static void BuildTree(CommentsPanel* cp) {
         if (!show) {
             continue;
         }
-        CommentNode* page = PageNode(cp, model->root, a->pageNo);
-        CommentNode* thread = AddNode(page, a);
-        thread->expanded = !VecContains(cp->collapsedThreads, a);
-        for (Annotation* r : replies) {
-            AddNode(thread, r);
-        }
+        CommentCardGroup* g = FindOrAddGroup(cp, groups, GroupKeyOf(cp, a));
+        VecAppend(g->cards, MakeCard(cp, a, replies));
     }
-    SortPages(model->root);
-    for (CommentNode* page : model->root->kids) {
-        page->text = str::Dup(fmt(Tr("Page %d (%d)").s, page->pageNo, len(page->kids)));
+    SortGroups(groups);
+    Vec<CommentCardGroup*> sorted;
+    for (GroupEntry& e : groups) {
+        if (cp->groupBy == CommentsGroupBy::Date) {
+            SortCardsByDate(e.group);
+        }
+        VecAppend(sorted, e.group);
     }
 
-    CommentsTree* old = cp->model;
-    cp->model = model;
-    cp->tree->SetTreeModel(model);
-    delete old;
+    cp->cards->SetGroups(sorted);
+    if (keepSel && VecContains(annots, keepSel)) {
+        cp->cards->Select(FindCard(cp, keepSel), false);
+    }
+    cp->cards->Scroll(keepScrollY);
     cp->loaded = true;
     EditSetCueText(cp->filterEdit, fmt(Tr("Search %d comments").s, nComments));
     SyncSelection(cp);
@@ -417,7 +506,7 @@ static void PostedRebuild(MainWindow* win) {
     }
     cp->rebuildPosted = false;
     if (IsShown(cp)) {
-        BuildTree(cp);
+        BuildCards(cp);
     }
 }
 
@@ -436,17 +525,15 @@ void RefreshCommentsPanel(MainWindow* win) {
     uitask::Post(MkFunc0(PostedRebuild, win), "RebuildComments");
 }
 
-// The tree's Annotation* belong to an engine about to go away
+// The cards' Annotation* belong to an engine about to go away
 void ClearCommentsPanel(MainWindow* win) {
     CommentsPanel* cp = PanelOf(win);
     if (!cp) {
         return;
     }
-    cp->tree->Clear();
-    delete cp->model;
-    cp->model = nullptr;
-    VecReset(cp->collapsedPages);
-    VecReset(cp->collapsedThreads);
+    Vec<CommentCardGroup*> none;
+    cp->cards->SetGroups(none);
+    cp->collapsedGroups.Reset();
     RefreshCommentsPanel(win);
 }
 
@@ -457,7 +544,7 @@ void UpdateCommentsPanel(MainWindow* win) {
         return;
     }
     StartLoadingAnnotationsForUi(win->CurrentTab());
-    BuildTree(cp);
+    BuildCards(cp);
 }
 
 void CommentsPanelSyncSelection(MainWindow* win) {
@@ -467,10 +554,10 @@ void CommentsPanelSyncSelection(MainWindow* win) {
     }
 }
 
-// The annotation of a row, if it's still there: a click can come in before
+// The annotation of a card, if it's still there: a click can come in before
 // the rebuild after a delete
-static Annotation* LiveAnnot(CommentsPanel* cp, CommentNode* n) {
-    if (!n || !n->annot || !TreeShowsModel(cp)) {
+static Annotation* LiveAnnot(CommentsPanel* cp, CommentCard* c) {
+    if (!c || !c->data) {
         return nullptr;
     }
     EngineBase* engine = TabEngine(cp->win->CurrentTab());
@@ -478,7 +565,8 @@ static Annotation* LiveAnnot(CommentsPanel* cp, CommentNode* n) {
     if (engine) {
         EngineMupdfGetLoadedAnnotations(engine, annots);
     }
-    return VecContains(annots, n->annot) ? n->annot : nullptr;
+    Annotation* a = (Annotation*)c->data;
+    return VecContains(annots, a) ? a : nullptr;
 }
 
 // the page may be showing, the annotation further down it not
@@ -497,9 +585,9 @@ static void ScrollAnnotIntoView(MainWindow* win, DisplayModel* dm, Annotation* a
     }
 }
 
-// goes to a row's thread and selects it; replies aren't drawn, so not them
-static Annotation* ChooseComment(CommentsPanel* cp, CommentNode* n) {
-    Annotation* a = LiveAnnot(cp, ThreadNode(n));
+// goes to a card's comment and selects it
+static Annotation* ChooseComment(CommentsPanel* cp, CommentCard* c) {
+    Annotation* a = LiveAnnot(cp, c);
     WindowTab* tab = cp->win->CurrentTab();
     DisplayModel* dm = tab ? tab->AsFixed() : nullptr;
     if (!a || !dm) {
@@ -510,73 +598,66 @@ static Annotation* ChooseComment(CommentsPanel* cp, CommentNode* n) {
     return a;
 }
 
-static void ShowCard(CommentsPanel* cp, CommentNode* n, AnnotPopupFocus focus) {
-    if (Annotation* a = ChooseComment(cp, n)) {
+static void ShowCard(CommentsPanel* cp, CommentCard* c, AnnotPopupFocus focus) {
+    if (Annotation* a = ChooseComment(cp, c)) {
         ShowAnnotationTextPopup(cp->win, a, focus);
     }
 }
 
 // a comment takes its replies with it
-static void DeleteComment(CommentsPanel* cp, CommentNode* n) {
-    Annotation* a = LiveAnnot(cp, n);
+static void DeleteComment(CommentsPanel* cp, CommentCard* c) {
+    Annotation* a = LiveAnnot(cp, c);
     if (a) {
         DeleteAnnotationAndUpdateUI(cp->win->CurrentTab(), a);
     }
 }
 
-static CommentsPanel* PanelOfHwnd(HWND hwnd) {
-    return PanelOf(FindMainWindowByHwnd(hwnd));
+static void AfterThreadChanged(CommentsPanel* cp) {
+    WindowTab* tab = cp->win->CurrentTab();
+    RefreshAnnotationLists(tab);
+    NotifyAnnotationsChanged(tab);
+    ToolbarUpdateStateForWindow(cp->win, false);
 }
 
-static void OnTreeSelectionChanged(TreeView::SelectionChangedEvent* ev) {
-    // a click goes through OnTreeClick; programmatic changes go nowhere
-    if (!ev->byKeyboard) {
+static void SetStatus(CommentsPanel* cp, CommentCard* c, ReviewState st) {
+    Annotation* a = LiveAnnot(cp, c);
+    if (!a || !SetReviewState(a, st)) {
         return;
     }
-    if (CommentsPanel* cp = PanelOfHwnd(ev->treeView->hwnd)) {
-        ChooseComment(cp, Node(ev->selectedItem));
-    }
+    AfterThreadChanged(cp);
 }
 
-static void OnTreeClick(TreeView::ClickEvent* ev) {
-    CommentsPanel* cp = PanelOfHwnd(ev->treeView->hwnd);
-    CommentNode* n = Node(ev->treeItem);
-    if (!cp || !n || !n->annot) {
-        return;
-    }
-    if (!ev->isDblClick) {
-        ChooseComment(cp, n);
-        return;
-    }
-    ShowCard(cp, n, AnnotPopupFocus::Text);
-    // not the default expand / collapse
-    ev->result = 1;
+static void OnCardSelected(CommentsPanel* cp, CommentCardsEvent* ev) {
+    ChooseComment(cp, ev->card);
 }
 
-static void OnTreeKeyDown(TreeView::KeyDownEvent* ev) {
-    CommentsPanel* cp = PanelOfHwnd(ev->treeView->hwnd);
-    if (!cp) {
-        return;
-    }
-    CommentNode* n = Node(cp->tree->GetSelection());
-    if (ev->keyCode == VK_RETURN) {
-        ShowCard(cp, n, AnnotPopupFocus::Text);
-        ev->result = 1;
-        return;
-    }
-    if (ev->keyCode == VK_DELETE) {
-        DeleteComment(cp, n);
-        ev->result = 1;
-    }
+static void OnCardActivated(CommentsPanel* cp, CommentCardsEvent* ev) {
+    ShowCard(cp, ev->card, AnnotPopupFocus::Text);
 }
 
-static void OnTreeGetTooltip(TreeView::GetTooltipEvent* ev) {
-    CommentNode* n = Node(ev->treeItem);
-    if (!n || len(n->tip) == 0) {
+static void OnCardDelete(CommentsPanel* cp, CommentCardsEvent* ev) {
+    DeleteComment(cp, ev->card);
+}
+
+static void OnCardReply(CommentsPanel* cp, CommentCardsEvent* ev) {
+    Annotation* a = LiveAnnot(cp, ev->card);
+    TempStr text = str::DupTemp(ev->text);
+    str::NormalizeNewlinesToLFInPlace(text);
+    if (!a || !AddAnnotationReply(a, text)) {
         return;
     }
-    NMTVGETINFOTIPW* info = ev->info;
-    str::BufSet(info->pszText, info->cchTextMax, n->tip);
+    cp->cards->replyEdit->SetText(StrL(""));
+    AfterThreadChanged(cp);
+}
+
+static void OnGroupToggled(CommentsPanel* cp, CommentCardsEvent* ev) {
+    TempStr key = CollapseKeyTemp(cp, ev->group->title);
+    int idx = cp->collapsedGroups.Find(key);
+    if (ev->group->collapsed && idx < 0) {
+        cp->collapsedGroups.Append(key);
+    } else if (!ev->group->collapsed && idx >= 0) {
+        cp->collapsedGroups.RemoveAt(idx);
+    }
 }
 
 // clang-format off
@@ -604,38 +685,59 @@ static MenuDef menuDefComments[] = {
 };
 // clang-format on
 
-static void OnTreeContextMenu(ContextMenuEvent* ev) {
-    CommentsPanel* cp = PanelOfHwnd(ev->w->hwnd);
-    if (!cp) {
-        return;
+// None, Accepted, ... with the thread's state checked
+static HMENU BuildStatusMenu(Annotation* a) {
+    HMENU sub = CreatePopupMenu();
+    ReviewState cur = ThreadState(a);
+    const ReviewState states[] = {ReviewState::None, ReviewState::Accepted, ReviewState::Rejected,
+                                  ReviewState::Cancelled, ReviewState::Completed};
+    for (ReviewState st : states) {
+        int id = kCmdSetStatusFirst + (int)st;
+        AppendMenuW(sub, MF_STRING, id, ToWStrTemp(ReviewStateLabel(st)).s);
+        MenuSetChecked(sub, id, st == cur);
     }
-    Point pt{};
-    CommentNode* n = Node(GetOrSelectTreeItemAtPos(ev, pt));
-    if (!n || !n->annot) {
+    return sub;
+}
+
+static void OnCardContextMenu(CommentsPanel* cp, CommentCardsEvent* ev) {
+    CommentCard* c = ev->card;
+    Annotation* a = LiveAnnot(cp, c);
+    if (!a) {
         return;
     }
     HMENU popup = BuildMenuFromDef(menuDefComments, CreatePopupMenu(), nullptr);
-    Annotation* thread = ThreadNode(n)->annot;
-    if (!AnnotationHasText(thread)) {
+    if (!AnnotationHasText(a)) {
         MenuRemove(popup, CmdShowAnnotationText);
     }
-    if (!CanAccessDisk() || !CanReplyToAnnotation(thread)) {
+    bool canReply = CanAccessDisk() && CanReplyToAnnotation(a);
+    if (!canReply) {
         MenuRemove(popup, CmdReplyToAnnotation);
+    } else {
+        // Set Status > before Delete
+        HMENU sub = BuildStatusMenu(a);
+        InsertMenuW(popup, CmdDeleteAnnotation, MF_BYCOMMAND | MF_POPUP | MF_STRING, (UINT_PTR)sub,
+                    ToWStrTemp(Tr("Set &Status")).s);
+        InsertMenuW(popup, CmdDeleteAnnotation, MF_BYCOMMAND | MF_SEPARATOR, 0, nullptr);
     }
     MarkMenuOwnerDraw(popup);
+    Point pt = ev->pt;
     int cmd = TrackPopupMenu(popup, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, cp->win->hwndFrame, nullptr);
     FreeMenuOwnerDrawInfoData(popup);
     DestroyMenu(popup);
 
+    if (cmd >= kCmdSetStatusFirst && cmd <= kCmdSetStatusFirst + (int)ReviewState::Completed) {
+        SetStatus(cp, c, (ReviewState)(cmd - kCmdSetStatusFirst));
+        return;
+    }
     switch (cmd) {
         case CmdShowAnnotationText:
-            ShowCard(cp, n, AnnotPopupFocus::Text);
+            ShowCard(cp, c, AnnotPopupFocus::Text);
             break;
         case CmdReplyToAnnotation:
-            ShowCard(cp, n, AnnotPopupFocus::Reply);
+            cp->cards->FocusReply();
             break;
         case CmdDeleteAnnotation:
-            DeleteComment(cp, n);
+            DeleteComment(cp, c);
             break;
     }
 }
@@ -643,18 +745,24 @@ static void OnTreeContextMenu(ContextMenuEvent* ev) {
 // same syntax as the Annotations window (AnnotSearch.cpp)
 static void OnFilterChanged(CommentsPanel* cp) {
     ParseAnnotFilterLenient(cp->filterEdit->GetTextTemp(), cp->filter);
-    BuildTree(cp);
+    BuildCards(cp);
 }
 
 static void OnAuthorChanged(CommentsPanel* cp) {
-    BuildTree(cp);
+    BuildCards(cp);
 }
 
-// Down goes into the tree, Esc clears the filter
+static void OnGroupByChanged(CommentsPanel* cp) {
+    int idx = CbGetCurrentSelection(cp->groupList);
+    cp->groupBy = (CommentsGroupBy)std::clamp(idx, 0, (int)CommentsGroupBy::Color);
+    BuildCards(cp);
+}
+
+// Down goes into the cards, Esc clears the filter
 static LRESULT CALLBACK WndProcFilterEdit(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR data) {
     CommentsPanel* cp = (CommentsPanel*)data;
     if (msg == WM_KEYDOWN && wp == VK_DOWN) {
-        HwndSetFocus(cp->tree->hwnd);
+        HwndSetFocus(cp->cards->hwnd);
         return 0;
     }
     if (msg == WM_KEYDOWN && wp == VK_ESCAPE && len(cp->filterEdit->GetTextTemp()) > 0) {
@@ -662,6 +770,28 @@ static LRESULT CALLBACK WndProcFilterEdit(HWND hwnd, UINT msg, WPARAM wp, LPARAM
         return 0;
     }
     return DefSubclassProc(hwnd, msg, wp, lp);
+}
+
+static DropDown* NewDropDown(HWND parent) {
+    auto* dd = new DropDown();
+    DropDown::CreateArgs args;
+    args.parent = parent;
+    args.font = GetAppFont();
+    args.isRtl = IsUIRtl();
+    dd->Create(args);
+    return dd;
+}
+
+static void SetGroupByItems(CommentsPanel* cp) {
+    StrVec items;
+    items.Append(Tr("By page"));
+    items.Append(Tr("By author"));
+    items.Append(Tr("By date"));
+    items.Append(Tr("By type"));
+    items.Append(Tr("By status"));
+    items.Append(Tr("By color"));
+    cp->groupList->SetItems(items);
+    CbSetCurrentSelection(cp->groupList, (int)cp->groupBy);
 }
 
 void CreateCommentsPanel(MainWindow* win) {
@@ -680,12 +810,7 @@ void CreateCommentsPanel(MainWindow* win) {
     cp->filterEdit->onTextChanged = MkFunc0(OnFilterChanged, cp);
     SetWindowSubclass(cp->filterEdit->hwnd, WndProcFilterEdit, NextSubclassId(), (DWORD_PTR)cp);
 
-    cp->authorList = new DropDown();
-    DropDown::CreateArgs dargs;
-    dargs.parent = parent;
-    dargs.font = GetAppFont();
-    dargs.isRtl = IsUIRtl();
-    cp->authorList->Create(dargs);
+    cp->authorList = NewDropDown(parent);
     cp->authorList->maxDx = DpiScaleByDpi(dpi, kAuthorListDx);
     cp->authorList->onSelectionChanged = MkFunc0(OnAuthorChanged, cp);
     StrVec items;
@@ -693,25 +818,30 @@ void CreateCommentsPanel(MainWindow* win) {
     cp->authorList->SetItems(items);
     CbSetCurrentSelection(cp->authorList, 0);
 
-    cp->tree = new TreeView();
-    TreeView::CreateArgs targs;
-    targs.parent = parent;
-    targs.font = GetAppTreeFont();
-    targs.fullRowSelect = true;
-    targs.isRtl = IsUIRtl();
-    cp->tree->onSelectionChanged = MkFunc1Void(OnTreeSelectionChanged);
-    cp->tree->onClick = MkFunc1Void(OnTreeClick);
-    cp->tree->onKeyDown = MkFunc1Void(OnTreeKeyDown);
-    cp->tree->onGetTooltip = MkFunc1Void(OnTreeGetTooltip);
-    cp->tree->onContextMenu = MkFunc1Void(OnTreeContextMenu);
-    cp->tree->Create(targs);
-    ReportIf(!cp->tree->hwnd);
+    cp->groupList = NewDropDown(parent);
+    SetGroupByItems(cp);
+    cp->groupList->onSelectionChanged = MkFunc0(OnGroupByChanged, cp);
 
-    // [filter][author] over the tree, which takes the remaining height
+    cp->cards = new CommentCards();
+    CommentCards::CreateArgs cargs;
+    cargs.parent = parent;
+    cargs.font = GetAppFont();
+    cargs.isRtl = IsUIRtl();
+    cp->cards->onSelected = MkFunc1(OnCardSelected, cp);
+    cp->cards->onActivated = MkFunc1(OnCardActivated, cp);
+    cp->cards->onDelete = MkFunc1(OnCardDelete, cp);
+    cp->cards->onReply = MkFunc1(OnCardReply, cp);
+    cp->cards->onContextMenu = MkFunc1(OnCardContextMenu, cp);
+    cp->cards->onGroupToggled = MkFunc1(OnGroupToggled, cp);
+    cp->cards->Create(cargs);
+    ReportIf(!cp->cards->hwnd);
+
+    // [filter][author] and [group by] over the cards, which take the rest
+    int gap = DpiScaleByDpi(dpi, 2);
     auto* header = new HBox();
     header->alignMain = MainAxisAlign::MainStart;
     header->alignCross = CrossAxisAlign::CrossCenter;
-    header->gap = DpiScaleByDpi(dpi, 2);
+    header->gap = gap;
     header->AddChild(cp->filterEdit, 1);
     header->AddChild(cp->authorList);
 
@@ -719,8 +849,10 @@ void CreateCommentsPanel(MainWindow* win) {
     cp->layout->alignMain = MainAxisAlign::MainStart;
     cp->layout->alignCross = CrossAxisAlign::Stretch;
     cp->layout->AddChild(header);
-    cp->layout->AddChild(new Spacer(0, 2));
-    cp->layout->AddChild(cp->tree, 1);
+    cp->layout->AddChild(new Spacer(0, gap));
+    cp->layout->AddChild(cp->groupList);
+    cp->layout->AddChild(new Spacer(0, gap));
+    cp->layout->AddChild(cp->cards, 1);
 
     win->commentsPanel = cp;
     UpdateCommentsPanelColors(win);
@@ -733,7 +865,6 @@ void DeleteCommentsPanel(MainWindow* win) {
     }
     win->commentsPanel = nullptr;
     delete cp->layout;
-    delete cp->model;
     delete cp;
 }
 
@@ -742,20 +873,21 @@ ILayout* CommentsViewLayout(MainWindow* win) {
     return cp ? cp->layout : nullptr;
 }
 
-int CommentsViewControls(MainWindow* win, ControlBase* out[3]) {
+int CommentsViewControls(MainWindow* win, ControlBase* out[kMaxViewControls]) {
     CommentsPanel* cp = PanelOf(win);
     if (!cp) {
         return 0;
     }
     out[0] = cp->filterEdit;
     out[1] = cp->authorList;
-    out[2] = cp->tree;
-    return 3;
+    out[2] = cp->groupList;
+    out[3] = cp->cards;
+    return 4;
 }
 
 HWND CommentsFocusHwnd(MainWindow* win) {
     CommentsPanel* cp = PanelOf(win);
-    return cp ? cp->tree->hwnd : nullptr;
+    return cp ? cp->cards->hwnd : nullptr;
 }
 
 void UpdateCommentsPanelColors(MainWindow* win) {
@@ -765,9 +897,10 @@ void UpdateCommentsPanelColors(MainWindow* win) {
     }
     Color bgCol = ThemeControlBackgroundColor();
     Color txtCol = ThemeWindowTextColor();
-    cp->tree->SetColors(txtCol, bgCol);
+    cp->cards->SetCardColors(txtCol, bgCol);
     cp->filterEdit->SetColors(txtCol, bgCol);
     cp->authorList->SetColors(txtCol, bgCol);
+    cp->groupList->SetColors(txtCol, bgCol);
 }
 
 void UpdateCommentsPanelDpi(MainWindow* win, int dpi) {
@@ -776,67 +909,114 @@ void UpdateCommentsPanelDpi(MainWindow* win, int dpi) {
         return;
     }
     PlatformFont* appFont = GetAppFontForDpi(dpi);
-    HwndSetTreeFontForDpi(cp->tree->hwnd, GetAppTreeFontForDpi(dpi)->GetHFont(), dpi);
+    cp->cards->UpdateFont(appFont);
     cp->filterEdit->SetFont(appFont);
     cp->authorList->SetFont(appFont);
     cp->authorList->maxDx = DpiScaleByDpi(dpi, kAuthorListDx);
+    cp->groupList->SetFont(appFont);
 }
 
-static void DumpNode(str::Builder& out, CommentNode* n, int depth) {
-    for (CommentNode* kid : n->kids) {
-        out.Append(StrL("row "));
-        for (int i = 0; i < depth; i++) {
-            out.Append(StrL("  "));
+//--- for tests
+
+// a group, a card, or a reply in dump order
+struct TestRow {
+    CommentCardGroup* group = nullptr;
+    CommentCard* card = nullptr;
+};
+
+static void CollectRows(CommentsPanel* cp, str::Builder& out, Vec<TestRow>& rows) {
+    for (CommentCardGroup* g : cp->cards->groups) {
+        Str collapsed = g->collapsed ? StrL(" collapsed") : Str{};
+        out.Append(fmt("row %s (%d)%s\n", g->title, len(g->cards), collapsed));
+        VecAppend(rows, TestRow{g, nullptr});
+        if (g->collapsed) {
+            continue;
         }
-        out.Append(kid->text);
-        out.AppendChar('\n');
-        DumpNode(out, kid, depth + 1);
+        for (CommentCard* c : g->cards) {
+            auto* a = (Annotation*)c->data;
+            out.Append(fmt("row   %s", CommentLabelTemp(a)));
+            if (len(c->status) > 0) {
+                out.Append(fmt(" [%s]", c->status));
+            }
+            out.AppendChar('\n');
+            VecAppend(rows, TestRow{g, c});
+            Vec<Annotation*> replies;
+            GetCommentReplies(a, replies);
+            for (Annotation* r : replies) {
+                out.Append(fmt("row     %s\n", CommentLabelTemp(r)));
+                VecAppend(rows, TestRow{g, c});
+            }
+        }
     }
 }
 
-static void CollectRows(CommentNode* n, Vec<CommentNode*>& out) {
-    for (CommentNode* kid : n->kids) {
-        VecAppend(out, kid);
-        CollectRows(kid, out);
-    }
+// "3 Completed" -> "Completed"
+static Str AfterSpace(Str s) {
+    int i = str::IndexOfChar(s, ' ');
+    return i < 0 ? Str{} : Str(s.s + i + 1, len(s) - i - 1);
 }
 
-// For tests: "filter" / "author" set the filters, "choose" / "delete" act on
-// the row with the given index (rows in dump order). Returns the tree.
+// For tests: "filter" / "author" / "group" set the view, "choose" / "delete"
+// act on the row with the given index (rows in dump order), "status" takes
+// "<row> <State>", "toggle" folds the group of a row. Returns the cards.
 TempStr CommentsPanelTestTemp(MainWindow* win, Str action, Str arg) {
     CommentsPanel* cp = PanelOf(win);
     if (!cp) {
         return fmt("FAIL no-panel");
     }
-    Vec<CommentNode*> rows;
-    if (cp->model) {
-        CollectRows(cp->model->root, rows);
-    }
+    str::Builder ignored;
+    Vec<TestRow> rows;
+    CollectRows(cp, ignored, rows);
     int idx = -1;
     str::Parse(arg, "%d", &idx);
-    CommentNode* row = VecIsValidIndex(rows, idx) ? rows[idx] : nullptr;
+    CommentCard* card = VecIsValidIndex(rows, idx) ? rows[idx].card : nullptr;
     if (str::Eq(action, StrL("filter"))) {
         cp->filterEdit->SetText(arg);
     } else if (str::Eq(action, StrL("author"))) {
         int i = len(arg) > 0 ? cp->authors.FindI(arg) : -1;
         CbSetCurrentSelection(cp->authorList, i + 1);
-        BuildTree(cp);
+        BuildCards(cp);
+    } else if (str::Eq(action, StrL("group"))) {
+        int i = SeqStrIndex(gGroupByNames, arg);
+        CbSetCurrentSelection(cp->groupList, std::max(i, 0));
+        OnGroupByChanged(cp);
     } else if (str::Eq(action, StrL("choose"))) {
-        ChooseComment(cp, row);
+        if (card) {
+            cp->cards->Select(card, true);
+        }
+        ChooseComment(cp, card);
     } else if (str::Eq(action, StrL("delete"))) {
-        DeleteComment(cp, row);
+        DeleteComment(cp, card);
+    } else if (str::Eq(action, StrL("status"))) {
+        int st = SeqStrIndex(gReviewStateNames, AfterSpace(arg));
+        if (card && st >= 0) {
+            SetStatus(cp, card, (ReviewState)st);
+        }
+    } else if (str::Eq(action, StrL("reply"))) {
+        Str text = AfterSpace(arg);
+        if (card && len(text) > 0) {
+            cp->cards->Select(card, false);
+            CommentCardsEvent ev;
+            ev.card = card;
+            ev.text = text;
+            OnCardReply(cp, &ev);
+        }
+    } else if (str::Eq(action, StrL("toggle"))) {
+        if (VecIsValidIndex(rows, idx)) {
+            cp->cards->ToggleGroup(rows[idx].group);
+        }
     } else if (str::Eq(action, StrL("rebuild"))) {
-        BuildTree(cp);
+        BuildCards(cp);
     }
 
     WindowTab* tab = win->CurrentTab();
     Annotation* sel = tab ? tab->selectedAnnotation : nullptr;
     TempStr selLabel = AnnotationIsLive(sel) ? CommentLabelTemp(sel) : str::DupTemp(StrL("-"));
     str::Builder out;
-    out.Append(fmt("comments shown=%d loaded=%d authors=%d author=%s selected=%s\n", IsShown(cp) ? 1 : 0,
-                   cp->loaded ? 1 : 0, len(cp->authors), SelectedAuthor(cp), selLabel));
-    if (cp->model) {
-        DumpNode(out, cp->model->root, 0);
-    }
+    out.Append(fmt("comments shown=%d loaded=%d authors=%d author=%s group=%s selected=%s\n", IsShown(cp) ? 1 : 0,
+                   cp->loaded ? 1 : 0, len(cp->authors), SelectedAuthor(cp),
+                   SeqStrByIndex(gGroupByNames, (int)cp->groupBy), selLabel));
+    VecReset(rows);
+    CollectRows(cp, out, rows);
     return ToStrTemp(out);
 }

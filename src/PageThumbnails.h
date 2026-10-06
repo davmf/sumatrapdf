@@ -31,6 +31,8 @@ struct PageThumbnailsCtrl : VirtListBox {
     int thumbDy = 0;
     int gap = 0;
     int rowGap = 0;
+    // Ctrl + wheel deltas not yet a whole zoom step (touchpads send small ones)
+    int zoomWheelDelta = 0;
     bool active = false;
     // palette: after going to a page on Enter or double click
     Func0 onPageOpened;
@@ -55,9 +57,12 @@ struct PageThumbnailsCtrl : VirtListBox {
     int RenderedCount() const;
     void SelectPage(int);
     void SetCurrentPage(int);
+    void SetZoom(int percent);
     Rect PageRect(int pageNo);
 
   protected:
+    void UpdateSizes();
+    void KeepThumbnailsAsStale();
     int PageAtPoint(Point);
     void OpenSelectedPage();
     void ResetCache();

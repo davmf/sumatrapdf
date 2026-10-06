@@ -823,6 +823,9 @@ struct Settings {
     // from numbered headings in its text (Generate Table Of Contents
     // command does it on demand)
     bool autoGenerateTOC;
+    // size of page thumbnails in percent, as last set with Ctrl + mouse
+    // wheel
+    int thumbnailZoom;
     // list of handlers for selected text, shown in context menu when text
     // selection is active. See [docs for more
     // information](https://www.sumatrapdfreader.org/docs/Customize-search-translation-services)
