@@ -206,6 +206,7 @@ static UINT_PTR removeIfNoDiskAccessPerm[] = {
     CmdNavigateFilesInFolder,
     CmdClose,
     CmdShowInFolder,
+    CmdSave,
     CmdSaveAs,
     CmdSaveSelectionAsImage,
     CmdRenameFile,

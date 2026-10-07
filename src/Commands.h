@@ -335,8 +335,9 @@ enum {
     CmdMergePDF = 529,
     CmdReplyToAnnotation = 530,
     CmdToggleComments = 531,
+    CmdSave = 532,
 
-    CmdLast = 531,
+    CmdLast = 532,
     CmdFirstCustom = CmdLast + 100,
 
     // aliases, at the end to not mess ordering

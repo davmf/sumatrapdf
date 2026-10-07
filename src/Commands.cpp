@@ -340,6 +340,7 @@ static SeqStrings gCommandNames =
     "CmdMergePDF\0"
     "CmdReplyToAnnotation\0"
     "CmdToggleComments\0"
+    "CmdSave\0"
     "\0";
 
 static i32 gCommandIds[] = {
@@ -669,6 +670,7 @@ static i32 gCommandIds[] = {
     CmdMergePDF,
     CmdReplyToAnnotation,
     CmdToggleComments,
+    CmdSave,
 };
 
 SeqStrings gCommandDescriptions =
@@ -998,6 +1000,7 @@ SeqStrings gCommandDescriptions =
     "Merge PDF...\0"
     "Reply to Comment\0"
     "Toggle Comments\0"
+    "Save\0"
     "\0";
 
 SeqStrings gCommandAltDescs =
