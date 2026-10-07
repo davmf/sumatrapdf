@@ -6464,6 +6464,21 @@ static void SaveCurrentFileAs(MainWindow* win) {
     SaveDocAs(win, ToUtf8Temp(dstFileName));
 }
 
+// Writes unsaved annotations into the open PDF. Nothing to save, or a plugin
+// temp file, falls back to Save As.
+static void SaveCurrentFile(MainWindow* win) {
+    if (!CanAccessDisk() || !win->IsDocLoaded()) {
+        return;
+    }
+    DisplayModel* dm = win->AsFixed();
+    EngineBase* engine = dm ? dm->GetEngine() : nullptr;
+    if (gPluginMode || !EngineHasUnsavedAnnotations(engine)) {
+        SaveCurrentFileAs(win);
+        return;
+    }
+    SaveAnnotationsToExistingFile(win->CurrentTab());
+}
+
 // Writes the open document to dstPath. A PostScript document saved as .pdf gets
 // the PDF Ghostscript produced; anything else is a copy of the source file.
 static bool SaveDocAs(MainWindow* win, Str dstPath) {
@@ -12299,6 +12314,10 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
 
         case CmdDeleteFileAndOpenNext:
             DeleteCurrentFileAndOpenNext(win);
+            break;
+
+        case CmdSave:
+            SaveCurrentFile(win);
             break;
 
         case CmdSaveAs:

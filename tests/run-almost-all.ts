@@ -273,6 +273,7 @@ import { testit as sidebarThumbnails } from "./sidebar-thumbnails.ts";
 import { testit as sidebarThumbnailsWheel } from "./sidebar-thumbnails-wheel.ts";
 import { testit as sidebarThumbnailsZoom } from "./sidebar-thumbnails-zoom.ts";
 import { testit as sidebarThumbnailsClose } from "./sidebar-thumbnails-close.ts";
+import { testit as saveInPlace } from "./save-in-place.ts";
 import { testit as issue6070 } from "./issue-6070.ts";
 import { testit as wheelWhileClosing } from "./wheel-while-closing.ts";
 import { testit as issue6259 } from "./issue-6259.ts";
@@ -669,6 +670,7 @@ export const tests: NamedTest[] = [
   ["sidebar-thumbnails-wheel", sidebarThumbnailsWheel],
   ["sidebar-thumbnails-zoom", sidebarThumbnailsZoom],
   ["sidebar-thumbnails-close", sidebarThumbnailsClose],
+  ["save-in-place", saveInPlace],
   ["issue-6070", issue6070],
   ["wheel-while-closing", wheelWhileClosing],
   ["issue-6259", issue6259],

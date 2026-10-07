@@ -42,7 +42,7 @@ static const int kSecView[] = {
     CmdRotateLeft, CmdRotateRight, CmdToggleFullscreen, 0,
 };
 static const int kSecDoc[] = {
-    CmdOpenFile, CmdSaveAs, CmdPrint, CmdReloadDocument,
+    CmdOpenFile, CmdSave, CmdPrint, CmdReloadDocument,
     CmdClose, CmdNewWindow, CmdOpenNextFileInFolder,
     CmdOpenPrevFileInFolder, CmdRenameFile, CmdProperties, 0,
 };
@@ -106,7 +106,7 @@ static const struct {
     {CmdFacingView, "Ctrl + 7"}, {CmdBookView, "Ctrl + 8"}, {CmdToggleContinuousView, "C"}, {CmdRotateLeft, "["},
     {CmdRotateRight, "]"}, {CmdToggleFullscreen, "F"}, {CmdToggleAutomaticallyScroll, "Ctrl + Shift + H"},
     {CmdToggleReadingBar, ""}, {CmdToggleReadingBarInvert, ""},
-    {CmdOpenFile, "Ctrl + O"}, {CmdSaveAs, "Ctrl + S"},
+    {CmdOpenFile, "Ctrl + O"}, {CmdSave, "Ctrl + S"},
     {CmdPrint, "Ctrl + P"}, {CmdReloadDocument, "R"}, {CmdClose, "Ctrl + W"}, {CmdNewWindow, "Ctrl + N"},
     {CmdOpenNextFileInFolder, "Ctrl + Shift + Right"}, {CmdOpenPrevFileInFolder, "Ctrl + Shift + Left"},
     {CmdRenameFile, "F2"}, {CmdProperties, "Ctrl + D"}, {CmdFindFirst, "Ctrl + F"}, {CmdFindNext, "F3"},
